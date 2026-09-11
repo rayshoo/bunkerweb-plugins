@@ -191,9 +191,10 @@ function clamav:access()
     return self:ret(true, "ClamAV plugin not enabled")
   end
 
-  -- Only process POST requests
-  if ngx.req.get_method() ~= "POST" then
-    return self:ret(true, "Not a POST request")
+  -- Only process POST or PATCH requests
+  local method = ngx.req.get_method()
+  if method ~= "POST" and method ~= "PATCH" then
+    return self:ret(true, "Not a POST or PATCH request")
   end
 
   -- Check for multipart/form-data content type
