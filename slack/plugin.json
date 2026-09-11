@@ -31,6 +31,33 @@
       "label": "Retry if limited by Slack",
       "regex": "^(yes|no)$",
       "type": "check"
+    },
+    "SLACK_ALERT_IPS": {
+      "context": "global",
+      "default": "",
+      "help": "Only notify denied requests from these IPs/networks (separated with spaces). Leave empty to notify every denied request.",
+      "id": "slack-alert-ips",
+      "label": "Alert IPs",
+      "regex": "^[0-9a-fA-F:./ ]*$",
+      "type": "text"
+    },
+    "SLACK_UNLISTED_THRESHOLD": {
+      "context": "global",
+      "default": "0",
+      "help": "When SLACK_ALERT_IPS is set, send one summary notification if this many requests from other IPs are denied within SLACK_UNLISTED_PERIOD (0 to disable).",
+      "id": "slack-unlisted-threshold",
+      "label": "Unlisted IPs threshold",
+      "regex": "^[0-9]+$",
+      "type": "text"
+    },
+    "SLACK_UNLISTED_PERIOD": {
+      "context": "global",
+      "default": "600",
+      "help": "Period in seconds used to count denied requests from IPs not in SLACK_ALERT_IPS.",
+      "id": "slack-unlisted-period",
+      "label": "Unlisted IPs period",
+      "regex": "^[1-9][0-9]*$",
+      "type": "text"
     }
   }
 }

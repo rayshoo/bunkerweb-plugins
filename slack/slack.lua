@@ -1,6 +1,7 @@
 local cjson = require("cjson")
 local class = require("middleclass")
 local http = require("resty.http")
+local ipmatcher = require("resty.ipmatcher")
 local plugin = require("bunkerweb.plugin")
 local utils = require("bunkerweb.utils")
 
@@ -20,11 +21,66 @@ local has_variable = utils.has_variable
 local get_variable = utils.get_variable
 local get_reason = utils.get_reason
 local tostring = tostring
+local tonumber = tonumber
 local encode = cjson.encode
+local ipmatcher_new = ipmatcher.new
+local shared_datastore = ngx.shared.datastore or ngx.shared.datastore_stream
+
+local UNLISTED_COUNTER_KEY = "plugin_slack_unlisted_count"
+
+-- Per-worker cache of the ipmatcher built from SLACK_ALERT_IPS
+local alert_ips_cache = { raw = nil, matcher = nil }
 
 function slack:initialize(ctx)
 	-- Call parent initialize
 	plugin.initialize(self, "slack", ctx)
+end
+
+-- Returns the ipmatcher for SLACK_ALERT_IPS or nil if the list is empty
+function slack:get_alert_ips_matcher()
+	local raw = self.variables["SLACK_ALERT_IPS"] or ""
+	if alert_ips_cache.raw == raw then
+		return alert_ips_cache.matcher
+	end
+	local ips = {}
+	for ip in raw:gmatch("%S+") do
+		ips[#ips + 1] = ip
+	end
+	local matcher, err
+	if #ips > 0 then
+		matcher, err = ipmatcher_new(ips)
+		if not matcher then
+			-- Fallback to notifying every denied request (matcher stays nil)
+			self.logger:log(ERR, "can't parse SLACK_ALERT_IPS, notifying all denied requests : " .. err)
+		end
+	end
+	alert_ips_cache.raw = raw
+	alert_ips_cache.matcher = matcher
+	return matcher
+end
+
+-- Counts denied requests from unlisted IPs and returns the count when the threshold is reached
+function slack:count_unlisted()
+	local threshold = tonumber(self.variables["SLACK_UNLISTED_THRESHOLD"]) or 0
+	if threshold <= 0 then
+		return nil
+	end
+	if not shared_datastore then
+		self.logger:log(ERR, "shared dict datastore not found, can't count unlisted IPs")
+		return nil
+	end
+	local period = tonumber(self.variables["SLACK_UNLISTED_PERIOD"]) or 600
+	-- The counter expires period seconds after the first denied request,
+	-- so at most one notification is sent per period
+	local count, err = shared_datastore:incr(UNLISTED_COUNTER_KEY, 1, 0, period)
+	if not count then
+		self.logger:log(ERR, "can't increment unlisted counter : " .. err)
+		return nil
+	end
+	if count == threshold then
+		return count, period
+	end
+	return nil
 end
 
 function slack:log(bypass_use_slack)
@@ -39,9 +95,43 @@ function slack:log(bypass_use_slack)
 	if reason == nil then
 		return self:ret(true, "request not denied")
 	end
+	-- Filter by SLACK_ALERT_IPS (empty list means every denied request is notified)
+	local prefix = ""
+	local matcher = self:get_alert_ips_matcher()
+	if matcher then
+		local match, err = matcher:match(self.ctx.bw.remote_addr)
+		if err then
+			self.logger:log(ERR, "can't match IP " .. self.ctx.bw.remote_addr .. " : " .. err)
+		end
+		if not match then
+			local count, period = self:count_unlisted()
+			if not count then
+				return self:ret(true, "IP not in SLACK_ALERT_IPS")
+			end
+			local summary = {
+				text = "```"
+					.. tostring(count)
+					.. " requests from IPs not in SLACK_ALERT_IPS have been denied within "
+					.. tostring(period)
+					.. "s (last one : IP "
+					.. self.ctx.bw.remote_addr
+					.. " / reason = "
+					.. reason
+					.. "). No more notification about unlisted IPs until the period ends.```",
+			}
+			local hdr
+			hdr, err = ngx_timer.at(0, self.send, self, summary)
+			if not hdr then
+				return self:ret(true, "can't create report timer : " .. err)
+			end
+			return self:ret(true, "scheduled timer for unlisted threshold")
+		end
+		prefix = ":rotating_light: *Denied request from a watched IP (SLACK_ALERT_IPS)*\n"
+	end
 	-- Compute data
 	local data = {}
-	data.text = "```Denied request for IP "
+	data.text = prefix
+		.. "```Denied request for IP "
 		.. self.ctx.bw.remote_addr
 		.. " (reason = "
 		.. reason

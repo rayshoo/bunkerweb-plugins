@@ -70,11 +70,26 @@ metadata:
 
 # Settings
 
-| Setting                    | Default                      | Context   | Multiple | Description                                                                                          |
-| -------------------------- | ---------------------------- | --------- | -------- | ---------------------------------------------------------------------------------------------------- |
-| `USE_WEBHOOK`              | `no`                         | multisite | no       | Enable sending alerts to a custom webhook.                                                           |
-| `WEBHOOK_URL`              | `https://api.example.com/bw` | global    | no       | Address of the webhook.                                                                              |
-| `WEBHOOK_RETRY_IF_LIMITED` | `no`                         | global    | no       | Retry to send the request if the remote server is rate limiting us (may consume a lot of resources). |
+| Setting                      | Default                      | Context   | Multiple | Description                                                                                                                                      |
+| ---------------------------- | ---------------------------- | --------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `USE_WEBHOOK`                | `no`                         | multisite | no       | Enable sending alerts to a custom webhook.                                                                                                       |
+| `WEBHOOK_URL`                | `https://api.example.com/bw` | global    | no       | Address of the webhook.                                                                                                                          |
+| `WEBHOOK_RETRY_IF_LIMITED`   | `no`                         | global    | no       | Retry to send the request if the remote server is rate limiting us (may consume a lot of resources).                                             |
+| `WEBHOOK_ALERT_IPS`          |                              | global    | no       | Only notify denied requests from these IPs/networks (separated with spaces, CIDR allowed). Leave empty to notify every denied request.           |
+| `WEBHOOK_UNLISTED_THRESHOLD` | `0`                          | global    | no       | When `WEBHOOK_ALERT_IPS` is set, send one summary notification if this many requests from other IPs are denied within `WEBHOOK_UNLISTED_PERIOD` (`0` to disable). |
+| `WEBHOOK_UNLISTED_PERIOD`    | `600`                        | global    | no       | Period in seconds used to count denied requests from IPs not in `WEBHOOK_ALERT_IPS`.                                                             |
+
+## Filtering notifications
+
+Receiving every denied request quickly becomes noise. Set `WEBHOOK_ALERT_IPS` to your own servers (proxies, redirectors, ...) to only get notified when requests coming from them are denied, before BunkerWeb ends up banning one of your own IPs :
+
+```yaml
+      - WEBHOOK_ALERT_IPS=10.0.0.5 10.0.1.0/24
+      - WEBHOOK_UNLISTED_THRESHOLD=100
+      - WEBHOOK_UNLISTED_PERIOD=600
+```
+
+With the configuration above, denied requests from `10.0.0.5` and `10.0.1.0/24` are notified immediately. Other denied requests are not notified individually, but a single summary is sent when 100 of them are denied within 10 minutes.
 
 # TODO
 

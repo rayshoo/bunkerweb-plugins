@@ -1,6 +1,7 @@
 local cjson = require("cjson")
 local class = require("middleclass")
 local http = require("resty.http")
+local ipmatcher = require("resty.ipmatcher")
 local plugin = require("bunkerweb.plugin")
 local utils = require("bunkerweb.utils")
 
@@ -20,16 +21,71 @@ local has_variable = utils.has_variable
 local get_variable = utils.get_variable
 local get_reason = utils.get_reason
 local tostring = tostring
+local tonumber = tonumber
 local len = string.len
 local sub = string.sub
 local format = string.format
 local encode = cjson.encode
 local floor = math.floor
 local date = os.date
+local ipmatcher_new = ipmatcher.new
+local shared_datastore = ngx.shared.datastore or ngx.shared.datastore_stream
+
+local UNLISTED_COUNTER_KEY = "plugin_discord_unlisted_count"
+
+-- Per-worker cache of the ipmatcher built from DISCORD_ALERT_IPS
+local alert_ips_cache = { raw = nil, matcher = nil }
 
 function discord:initialize(ctx)
 	-- Call parent initialize
 	plugin.initialize(self, "discord", ctx)
+end
+
+-- Returns the ipmatcher for DISCORD_ALERT_IPS or nil if the list is empty
+function discord:get_alert_ips_matcher()
+	local raw = self.variables["DISCORD_ALERT_IPS"] or ""
+	if alert_ips_cache.raw == raw then
+		return alert_ips_cache.matcher
+	end
+	local ips = {}
+	for ip in raw:gmatch("%S+") do
+		ips[#ips + 1] = ip
+	end
+	local matcher, err
+	if #ips > 0 then
+		matcher, err = ipmatcher_new(ips)
+		if not matcher then
+			-- Fallback to notifying every denied request (matcher stays nil)
+			self.logger:log(ERR, "can't parse DISCORD_ALERT_IPS, notifying all denied requests : " .. err)
+		end
+	end
+	alert_ips_cache.raw = raw
+	alert_ips_cache.matcher = matcher
+	return matcher
+end
+
+-- Counts denied requests from unlisted IPs and returns the count when the threshold is reached
+function discord:count_unlisted()
+	local threshold = tonumber(self.variables["DISCORD_UNLISTED_THRESHOLD"]) or 0
+	if threshold <= 0 then
+		return nil
+	end
+	if not shared_datastore then
+		self.logger:log(ERR, "shared dict datastore not found, can't count unlisted IPs")
+		return nil
+	end
+	local period = tonumber(self.variables["DISCORD_UNLISTED_PERIOD"]) or 600
+	-- The counter expires period seconds after the first denied request,
+	-- so at most one notification is sent per period
+	local count, err = shared_datastore:incr(UNLISTED_COUNTER_KEY, 1, 0, period)
+	if not count then
+		self.logger:log(ERR, "can't increment unlisted counter : " .. err)
+		return nil
+	end
+	if count == threshold then
+		return count, period
+	end
+	return nil
 end
 
 function discord:log(bypass_use_discord)
@@ -55,14 +111,75 @@ function discord:log(bypass_use_discord)
 			return sub(inputString, 1, 1021) .. "..."
 		end
 	end
+	local embedTimestamp = formattedTimestamp .. "." .. format("%03d", milliseconds) .. "Z"
+
+	-- Filter by DISCORD_ALERT_IPS (empty list means every denied request is notified)
+	local title = "Denied request for IP " .. self.ctx.bw.remote_addr
+	local color = 0x125678
+	local matcher = self:get_alert_ips_matcher()
+	if matcher then
+		local match, err = matcher:match(self.ctx.bw.remote_addr)
+		if err then
+			self.logger:log(ERR, "can't match IP " .. self.ctx.bw.remote_addr .. " : " .. err)
+		end
+		if not match then
+			local count, period = self:count_unlisted()
+			if not count then
+				return self:ret(true, "IP not in DISCORD_ALERT_IPS")
+			end
+			local summary = {
+				username = "BunkerWeb",
+				embeds = {
+					{
+						title = tostring(count)
+							.. " requests from IPs not in DISCORD_ALERT_IPS have been denied within "
+							.. tostring(period)
+							.. "s",
+						description = "No more notification about unlisted IPs until the period ends.",
+						timestamp = embedTimestamp,
+						color = 0xE67E22,
+						provider = {
+							name = "BunkerWeb",
+							url = "https://github.com/bunkerity/bunkerweb",
+						},
+						author = {
+							name = "BunkerWeb's Discord plugin",
+							url = "https://github.com/bunkerity/bunkerweb",
+							icon_url = "https://raw.githubusercontent.com/bunkerity/bunkerweb-plugins/main/logo.png",
+						},
+						fields = {
+							{
+								name = "Last denied IP",
+								value = self.ctx.bw.remote_addr,
+								inline = true,
+							},
+							{
+								name = "Reason",
+								value = formatField(reason),
+								inline = true,
+							},
+						},
+					},
+				},
+			}
+			local hdr
+			hdr, err = ngx_timer.at(0, self.send, self, summary)
+			if not hdr then
+				return self:ret(true, "can't create report timer : " .. err)
+			end
+			return self:ret(true, "scheduled timer for unlisted threshold")
+		end
+		title = "🚨 Denied request from watched IP " .. self.ctx.bw.remote_addr
+		color = 0xE74C3C
+	end
 
 	local data = {
 		username = "BunkerWeb",
 		embeds = {
 			{
-				title = "Denied request for IP " .. self.ctx.bw.remote_addr,
-				timestamp = formattedTimestamp .. "." .. format("%03d", milliseconds) .. "Z",
-				color = 0x125678,
+				title = title,
+				timestamp = embedTimestamp,
+				color = color,
 				provider = {
 					name = "BunkerWeb",
 					url = "https://github.com/bunkerity/bunkerweb",
