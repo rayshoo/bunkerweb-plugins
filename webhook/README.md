@@ -91,6 +91,19 @@ Receiving every denied request quickly becomes noise. Set `WEBHOOK_ALERT_IPS` to
 
 With the configuration above, denied requests from `10.0.0.5` and `10.0.1.0/24` are notified immediately. Other denied requests are not notified individually, but a single summary is sent when 100 of them are denied within 10 minutes.
 
+When `USE_REDIS` is set to `yes`, the counter of denied requests from unlisted IPs is shared between all BunkerWeb instances through Redis. Otherwise each instance counts on its own.
+
+## Web UI
+
+The plugin page of the web UI shows :
+
+- the IP filter status (`WEBHOOK_ALERT_IPS`, `WEBHOOK_UNLISTED_THRESHOLD` and `WEBHOOK_UNLISTED_PERIOD`)
+- the current number of denied requests from unlisted IPs within the period
+- the IPs of `WEBHOOK_ALERT_IPS` that are currently banned
+- the last notified denied requests from IPs of `WEBHOOK_ALERT_IPS`
+
+Like the other pages of the web UI, the data of all instances is merged (or read from Redis when `USE_REDIS` is set to `yes`).
+
 # TODO
 
 - Add more info in notification :

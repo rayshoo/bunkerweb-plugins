@@ -23,10 +23,16 @@ local get_reason = utils.get_reason
 local tostring = tostring
 local tonumber = tonumber
 local encode = cjson.encode
+local decode = cjson.decode
+local ngx_now = ngx.now
+local table_insert = table.insert
+local table_sort = table.sort
 local ipmatcher_new = ipmatcher.new
 local shared_datastore = ngx.shared.datastore or ngx.shared.datastore_stream
 
 local UNLISTED_COUNTER_KEY = "plugin_webhook_unlisted_count"
+local RECENT_ALERTS_KEY = "plugin_webhook_recent_alerts"
+local RECENT_ALERTS_MAX = 20
 
 -- Per-worker cache of the ipmatcher built from WEBHOOK_ALERT_IPS
 local alert_ips_cache = { raw = nil, matcher = nil }
@@ -59,28 +65,140 @@ function webhook:get_alert_ips_matcher()
 	return matcher
 end
 
--- Counts denied requests from unlisted IPs and returns the count when the threshold is reached
-function webhook:count_unlisted()
-	local threshold = tonumber(self.variables["WEBHOOK_UNLISTED_THRESHOLD"]) or 0
-	if threshold <= 0 then
-		return nil
+-- Increments the counter of denied requests from unlisted IPs (shared through redis if enabled)
+-- The counter expires period seconds after the first denied request,
+-- so at most one notification is sent per period
+function webhook:incr_unlisted(period)
+	if self.use_redis then
+		local ok, err = self.clusterstore:connect()
+		if ok then
+			local ret
+			ret, err = self.clusterstore:call(
+				"eval",
+				[[
+				local count = redis.call("INCR", KEYS[1])
+				if count == 1 then
+					redis.call("EXPIRE", KEYS[1], ARGV[1])
+				end
+				return count
+			]],
+				1,
+				UNLISTED_COUNTER_KEY,
+				period
+			)
+			self.clusterstore:close()
+			if ret then
+				return tonumber(ret)
+			end
+		end
+		self.logger:log(ERR, "can't increment unlisted counter on redis, falling back to local : " .. tostring(err))
 	end
 	if not shared_datastore then
 		self.logger:log(ERR, "shared dict datastore not found, can't count unlisted IPs")
 		return nil
 	end
-	local period = tonumber(self.variables["WEBHOOK_UNLISTED_PERIOD"]) or 600
-	-- The counter expires period seconds after the first denied request,
-	-- so at most one notification is sent per period
 	local count, err = shared_datastore:incr(UNLISTED_COUNTER_KEY, 1, 0, period)
 	if not count then
 		self.logger:log(ERR, "can't increment unlisted counter : " .. err)
 		return nil
 	end
-	if count == threshold then
-		return count, period
+	return count
+end
+
+-- Stores a notified denied request from a watched IP (shared through redis if enabled)
+function webhook:push_recent_alert(alert)
+	local value = encode(alert)
+	if self.use_redis then
+		local ok, err = self.clusterstore:connect()
+		if ok then
+			local ret
+			ret, err = self.clusterstore:call(
+				"eval",
+				[[
+				redis.call("LPUSH", KEYS[1], ARGV[1])
+				redis.call("LTRIM", KEYS[1], 0, tonumber(ARGV[2]) - 1)
+				return 1
+			]],
+				1,
+				RECENT_ALERTS_KEY,
+				value,
+				RECENT_ALERTS_MAX
+			)
+			self.clusterstore:close()
+			if ret then
+				return
+			end
+		end
+		self.logger:log(ERR, "can't store recent alert on redis, falling back to local : " .. tostring(err))
 	end
-	return nil
+	if not shared_datastore then
+		return
+	end
+	-- Local ring buffer of RECENT_ALERTS_MAX entries
+	local idx, err = shared_datastore:incr(RECENT_ALERTS_KEY .. "_idx", 1, 0)
+	if not idx then
+		self.logger:log(ERR, "can't store recent alert : " .. err)
+		return
+	end
+	shared_datastore:set(RECENT_ALERTS_KEY .. "_" .. tostring(idx % RECENT_ALERTS_MAX), value)
+end
+
+-- Returns the data displayed on the plugin page of the web UI
+function webhook:get_stats()
+	local stats = {
+		source = "local",
+		alert_ips = self.variables["WEBHOOK_ALERT_IPS"] or "",
+		threshold = tonumber(self.variables["WEBHOOK_UNLISTED_THRESHOLD"]) or 0,
+		period = tonumber(self.variables["WEBHOOK_UNLISTED_PERIOD"]) or 600,
+		unlisted_count = 0,
+		unlisted_ttl = 0,
+		recent_alerts = {},
+	}
+	if self.use_redis then
+		local ok, err = self.clusterstore:connect(true)
+		if ok then
+			local count, ttl, alerts
+			count, err = self.clusterstore:call("get", UNLISTED_COUNTER_KEY)
+			if count then
+				ttl, err = self.clusterstore:call("ttl", UNLISTED_COUNTER_KEY)
+			end
+			if ttl then
+				alerts, err = self.clusterstore:call("lrange", RECENT_ALERTS_KEY, 0, -1)
+			end
+			self.clusterstore:close()
+			if alerts then
+				stats.source = "redis"
+				stats.unlisted_count = tonumber(count) or 0
+				stats.unlisted_ttl = math.max(tonumber(ttl) or 0, 0)
+				for _, value in ipairs(alerts) do
+					local decoded, alert = pcall(decode, value)
+					if decoded then
+						table_insert(stats.recent_alerts, alert)
+					end
+				end
+				return stats
+			end
+		end
+		self.logger:log(ERR, "can't get stats from redis, falling back to local : " .. tostring(err))
+	end
+	if not shared_datastore then
+		return stats
+	end
+	stats.unlisted_count = shared_datastore:get(UNLISTED_COUNTER_KEY) or 0
+	stats.unlisted_ttl = shared_datastore:ttl(UNLISTED_COUNTER_KEY) or 0
+	for i = 0, RECENT_ALERTS_MAX - 1 do
+		local value = shared_datastore:get(RECENT_ALERTS_KEY .. "_" .. tostring(i))
+		if value then
+			local decoded, alert = pcall(decode, value)
+			if decoded then
+				table_insert(stats.recent_alerts, alert)
+			end
+		end
+	end
+	table_sort(stats.recent_alerts, function(a, b)
+		return (a.date or 0) > (b.date or 0)
+	end)
+	return stats
 end
 
 function webhook:log(bypass_use_webhook)
@@ -97,6 +215,7 @@ function webhook:log(bypass_use_webhook)
 	end
 	-- Filter by WEBHOOK_ALERT_IPS (empty list means every denied request is notified)
 	local prefix = ""
+	local watched = false
 	local matcher = self:get_alert_ips_matcher()
 	if matcher then
 		local match, err = matcher:match(self.ctx.bw.remote_addr)
@@ -104,28 +223,18 @@ function webhook:log(bypass_use_webhook)
 			self.logger:log(ERR, "can't match IP " .. self.ctx.bw.remote_addr .. " : " .. err)
 		end
 		if not match then
-			local count, period = self:count_unlisted()
-			if not count then
+			if (tonumber(self.variables["WEBHOOK_UNLISTED_THRESHOLD"]) or 0) <= 0 then
 				return self:ret(true, "IP not in WEBHOOK_ALERT_IPS")
 			end
-			local summary = {
-				content = "```"
-					.. tostring(count)
-					.. " requests from IPs not in WEBHOOK_ALERT_IPS have been denied within "
-					.. tostring(period)
-					.. "s (last one : IP "
-					.. self.ctx.bw.remote_addr
-					.. " / reason = "
-					.. reason
-					.. "). No more notification about unlisted IPs until the period ends.```",
-			}
+			-- Counting is done in a timer because redis can't be used in the log phase
 			local hdr
-			hdr, err = ngx_timer.at(0, self.send, self, summary)
+			hdr, err = ngx_timer.at(0, self.unlisted, self, self.ctx.bw.remote_addr, reason)
 			if not hdr then
-				return self:ret(true, "can't create report timer : " .. err)
+				return self:ret(true, "can't create unlisted timer : " .. err)
 			end
-			return self:ret(true, "scheduled timer for unlisted threshold")
+			return self:ret(true, "scheduled timer for unlisted IP")
 		end
+		watched = true
 		prefix = "🚨 Denied request from a watched IP (WEBHOOK_ALERT_IPS)\n"
 	end
 	-- Compute data
@@ -151,7 +260,17 @@ function webhook:log(bypass_use_webhook)
 	data.content = data.content .. "```"
 	-- Send request
 	local hdr
-	hdr, err = ngx_timer.at(0, self.send, self, data)
+	if watched then
+		local alert = {
+			date = ngx_now(),
+			ip = self.ctx.bw.remote_addr,
+			reason = reason,
+			server_name = self.ctx.bw.server_name,
+		}
+		hdr, err = ngx_timer.at(0, self.watched, self, data, alert)
+	else
+		hdr, err = ngx_timer.at(0, self.send, self, data)
+	end
 	if not hdr then
 		return self:ret(true, "can't create report timer : " .. err)
 	end
@@ -159,6 +278,31 @@ function webhook:log(bypass_use_webhook)
 end
 
 -- luacheck: ignore 212
+function webhook.watched(premature, self, data, alert)
+	self:push_recent_alert(alert)
+	webhook.send(premature, self, data)
+end
+
+function webhook.unlisted(premature, self, ip, reason)
+	local threshold = tonumber(self.variables["WEBHOOK_UNLISTED_THRESHOLD"]) or 0
+	local period = tonumber(self.variables["WEBHOOK_UNLISTED_PERIOD"]) or 600
+	local count = self:incr_unlisted(period)
+	if count ~= threshold then
+		return
+	end
+	webhook.send(premature, self, {
+		content = "```"
+			.. tostring(count)
+			.. " requests from IPs not in WEBHOOK_ALERT_IPS have been denied within "
+			.. tostring(period)
+			.. "s (last one : IP "
+			.. ip
+			.. " / reason = "
+			.. reason
+			.. "). No more notification about unlisted IPs until the period ends.```",
+	})
+end
+
 function webhook.send(premature, self, data)
 	local httpc, err = http_new()
 	if not httpc then
@@ -214,6 +358,9 @@ function webhook:log_default()
 end
 
 function webhook:api()
+	if self.ctx.bw.uri == "/webhook/stats" and self.ctx.bw.request_method == "GET" then
+		return self:ret(true, self:get_stats(), HTTP_OK)
+	end
 	if self.ctx.bw.uri == "/webhook/ping" and self.ctx.bw.request_method == "POST" then
 		-- Check webhook connection
 		local check, err = has_variable("USE_WEBHOOK", "yes")
