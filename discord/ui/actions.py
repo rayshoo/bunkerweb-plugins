@@ -9,14 +9,18 @@ SETTING_PREFIX = "DISCORD"
 RECENT_ALERTS_MAX = 20
 
 
-def _parse_networks(raw):
-    networks = []
+def _parse_entries(raw):
+    entries = []
     for entry in (raw or "").split():
         try:
-            networks.append(ip_network(entry, strict=False))
+            entries.append((entry, ip_network(entry, strict=False)))
         except ValueError:
             continue
-    return networks
+    return entries
+
+
+def _parse_networks(raw):
+    return [network for _, network in _parse_entries(raw)]
 
 
 def _in_networks(ip, networks):
@@ -30,6 +34,13 @@ def _in_networks(ip, networks):
 def _format_date(value):
     try:
         return datetime.fromtimestamp(float(value), tz=timezone.utc).isoformat()
+    except (TypeError, ValueError, OSError):
+        return str(value or "")
+
+
+def _format_local_date(value):
+    try:
+        return datetime.fromtimestamp(float(value)).strftime("%Y-%m-%d %H:%M:%S")
     except (TypeError, ValueError, OSError):
         return str(value or "")
 
@@ -182,6 +193,25 @@ def pre_render(**kwargs):
             key=lambda ban: ban.get("date", 0) or 0,
             reverse=True,
         )
+        alerts = stats.get("recent_alerts", [])
+
+        # One row per entry of the watched list with its current ban status and its last notified request
+        entries = _parse_entries(stats.get("alert_ips"))
+        statuses, last_alerts = [], []
+        for _, network in entries:
+            entry_bans = sorted({ban.get("ip") for ban in banned if _in_networks(ban.get("ip"), [network])})
+            statuses.append(f"Banned ({', '.join(entry_bans)})" if network.num_addresses > 1 and entry_bans else "Banned" if entry_bans else "OK")
+            entry_alert = next((alert for alert in alerts if _in_networks(alert.get("ip"), [network])), None)
+            last_alerts.append(_format_local_date(entry_alert.get("date")) if entry_alert else "-")
+        ret["list_watched_ips"] = {
+            "data": {
+                "IP/Network": [entry for entry, _ in entries],
+                "Status": statuses,
+                "Last alert": last_alerts,
+            },
+            "col-size": "col-12",
+        }
+
         ret["list_banned_watched_ips"] = {
             "data": (
                 {
@@ -198,7 +228,6 @@ def pre_render(**kwargs):
             "col-size": "col-12",
         }
 
-        alerts = stats.get("recent_alerts", [])
         ret["list_recent_watched_alerts"] = {
             "data": (
                 {

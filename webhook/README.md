@@ -98,6 +98,7 @@ When `USE_REDIS` is set to `yes`, the counter of denied requests from unlisted I
 The plugin page of the web UI shows :
 
 - the IP filter status (`WEBHOOK_ALERT_IPS`, `WEBHOOK_UNLISTED_THRESHOLD` and `WEBHOOK_UNLISTED_PERIOD`)
+- the IPs/networks of `WEBHOOK_ALERT_IPS` with their ban status and last notified request
 - the current number of denied requests from unlisted IPs within the period
 - the IPs of `WEBHOOK_ALERT_IPS` that are currently banned
 - the last notified denied requests from IPs of `WEBHOOK_ALERT_IPS`

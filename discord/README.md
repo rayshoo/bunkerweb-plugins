@@ -110,6 +110,7 @@ When `USE_REDIS` is set to `yes`, the counter of denied requests from unlisted I
 The plugin page of the web UI shows :
 
 - the IP filter status (`DISCORD_ALERT_IPS`, `DISCORD_UNLISTED_THRESHOLD` and `DISCORD_UNLISTED_PERIOD`)
+- the IPs/networks of `DISCORD_ALERT_IPS` with their ban status and last notified request
 - the current number of denied requests from unlisted IPs within the period
 - the IPs of `DISCORD_ALERT_IPS` that are currently banned
 - the last notified denied requests from IPs of `DISCORD_ALERT_IPS`
