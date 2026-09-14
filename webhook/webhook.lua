@@ -2,6 +2,7 @@ local cjson = require("cjson")
 local class = require("middleclass")
 local http = require("resty.http")
 local ipmatcher = require("resty.ipmatcher")
+local clusterstore = require("bunkerweb.clusterstore")
 local plugin = require("bunkerweb.plugin")
 local utils = require("bunkerweb.utils")
 
@@ -70,10 +71,11 @@ end
 -- so at most one notification is sent per period
 function webhook:incr_unlisted(period)
 	if self.use_redis then
-		local ok, err = self.clusterstore:connect()
+		local cs = clusterstore:new()
+		local ok, err = cs:connect()
 		if ok then
 			local ret
-			ret, err = self.clusterstore:call(
+			ret, err = cs:call(
 				"eval",
 				[[
 				local count = redis.call("INCR", KEYS[1])
@@ -86,7 +88,7 @@ function webhook:incr_unlisted(period)
 				UNLISTED_COUNTER_KEY,
 				period
 			)
-			self.clusterstore:close()
+			cs:close()
 			if ret then
 				return tonumber(ret)
 			end
@@ -109,10 +111,11 @@ end
 function webhook:push_recent_alert(alert)
 	local value = encode(alert)
 	if self.use_redis then
-		local ok, err = self.clusterstore:connect()
+		local cs = clusterstore:new()
+		local ok, err = cs:connect()
 		if ok then
 			local ret
-			ret, err = self.clusterstore:call(
+			ret, err = cs:call(
 				"eval",
 				[[
 				redis.call("LPUSH", KEYS[1], ARGV[1])
@@ -124,7 +127,7 @@ function webhook:push_recent_alert(alert)
 				value,
 				RECENT_ALERTS_MAX
 			)
-			self.clusterstore:close()
+			cs:close()
 			if ret then
 				return
 			end
@@ -155,17 +158,18 @@ function webhook:get_stats()
 		recent_alerts = {},
 	}
 	if self.use_redis then
-		local ok, err = self.clusterstore:connect(true)
+		local cs = clusterstore:new()
+		local ok, err = cs:connect(true)
 		if ok then
 			local count, ttl, alerts
-			count, err = self.clusterstore:call("get", UNLISTED_COUNTER_KEY)
+			count, err = cs:call("get", UNLISTED_COUNTER_KEY)
 			if count then
-				ttl, err = self.clusterstore:call("ttl", UNLISTED_COUNTER_KEY)
+				ttl, err = cs:call("ttl", UNLISTED_COUNTER_KEY)
 			end
 			if ttl then
-				alerts, err = self.clusterstore:call("lrange", RECENT_ALERTS_KEY, 0, -1)
+				alerts, err = cs:call("lrange", RECENT_ALERTS_KEY, 0, -1)
 			end
-			self.clusterstore:close()
+			cs:close()
 			if alerts then
 				stats.source = "redis"
 				stats.unlisted_count = tonumber(count) or 0
