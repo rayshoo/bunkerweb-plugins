@@ -6,7 +6,7 @@ from traceback import format_exc
 
 PLUGIN_ID = "slack"
 SETTING_PREFIX = "SLACK"
-RECENT_ALERTS_MAX = 20
+ALERTS_MAX = 20
 
 
 def _parse_entries(raw):
@@ -57,26 +57,29 @@ def _format_duration(seconds):
     return " ".join(parts)
 
 
+def _alist(value):
+    return value if isinstance(value, list) else []
+
+
 def _get_stats(bw_instances_utils):
-    """Merge the stats of all instances : redis data is shared, local data is summed like BunkerWeb metrics"""
+    """Merge the stats of all instances : redis data is shared, otherwise merge each instance's local data"""
     stats = None
     for instance_data in bw_instances_utils.get_data(f"{PLUGIN_ID}/stats"):
         for data in instance_data.values():
             if not isinstance(data, dict) or "source" not in data:
                 continue
-            alerts = data.get("recent_alerts")
-            if not isinstance(alerts, list):
-                alerts = []
+            watched = _alist(data.get("watched_alerts"))
+            unlisted = _alist(data.get("unlisted_alerts"))
             if data["source"] == "redis":
-                return data | {"recent_alerts": alerts}
+                return data | {"watched_alerts": watched, "unlisted_alerts": unlisted}
             if stats is None:
-                stats = data | {"recent_alerts": list(alerts)}
+                stats = data | {"watched_alerts": list(watched), "unlisted_alerts": list(unlisted)}
                 continue
-            stats["unlisted_count"] = stats.get("unlisted_count", 0) + data.get("unlisted_count", 0)
-            stats["unlisted_ttl"] = max(stats.get("unlisted_ttl", 0), data.get("unlisted_ttl", 0))
-            stats["recent_alerts"].extend(alerts)
+            stats["watched_alerts"].extend(watched)
+            stats["unlisted_alerts"].extend(unlisted)
     if stats:
-        stats["recent_alerts"] = sorted(stats["recent_alerts"], key=lambda alert: alert.get("date", 0), reverse=True)[:RECENT_ALERTS_MAX]
+        for key in ("watched_alerts", "unlisted_alerts"):
+            stats[key] = sorted(stats[key], key=lambda alert: alert.get("date", 0), reverse=True)[:ALERTS_MAX]
     return stats
 
 
@@ -167,33 +170,21 @@ def pre_render(**kwargs):
             "title": "IP FILTER",
             "value": f"{len(networks)} watched IPs/networks",
             "description": (
-                f"Unlisted IPs : one summary after {threshold} denied requests within {_format_duration(period)}"
+                f"Unlisted IPs : notify each IP denied {threshold}+ times within {_format_duration(period)}"
                 if threshold > 0
                 else "Unlisted IPs : not notified"
             ),
-            "col-size": "col-12 col-md-4",
+            "col-size": "col-12 col-md-6",
             "card-classes": "h-100",
         }
-
-        if threshold > 0:
-            count = int(stats.get("unlisted_count") or 0)
-            ttl = int(stats.get("unlisted_ttl") or 0)
-            ret["counter_unlisted_denied"] = {
-                "title": "UNLISTED DENIED",
-                "value": count,
-                "subtitle": f"threshold {threshold}" + (f", resets in {_format_duration(ttl)}" if count and ttl else ""),
-                "subtitle_color": "danger" if count >= threshold else "muted",
-                "svg_color": "danger" if count >= threshold else "primary",
-                "col-size": "col-12 col-md-4",
-                "card-classes": "h-100",
-            }
 
         banned = sorted(
             (ban for ban in _get_bans(kwargs["bw_instances_utils"]) if _in_networks(ban.get("ip"), networks)),
             key=lambda ban: ban.get("date", 0) or 0,
             reverse=True,
         )
-        alerts = stats.get("recent_alerts", [])
+        alerts = stats.get("watched_alerts", [])
+        unlisted_alerts = stats.get("unlisted_alerts", [])
 
         # One row per entry of the watched list with its current ban status and its last notified request
         entries = _parse_entries(stats.get("alert_ips"))
@@ -237,6 +228,20 @@ def pre_render(**kwargs):
                     "Server name": [str(alert.get("server_name", "")) for alert in alerts],
                 }
                 if alerts
+                else {}
+            ),
+            "col-size": "col-12",
+        }
+
+        ret["list_unlisted_ip_alerts"] = {
+            "data": (
+                {
+                    "Date": [_format_date(alert.get("date")) for alert in unlisted_alerts],
+                    "IP": [str(alert.get("ip", "")) for alert in unlisted_alerts],
+                    "Denied": [str(alert.get("count", "")) for alert in unlisted_alerts],
+                    "Reason": [str(alert.get("reason", "")) for alert in unlisted_alerts],
+                }
+                if unlisted_alerts
                 else {}
             ),
             "col-size": "col-12",

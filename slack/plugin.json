@@ -2,7 +2,7 @@
   "id": "slack",
   "name": "Slack",
   "description": "Send alerts to a Slack channel (using webhooks).",
-  "version": "1.9.4",
+  "version": "1.9.5",
   "stream": "partial",
   "settings": {
     "USE_SLACK": {
@@ -44,7 +44,7 @@
     "SLACK_UNLISTED_THRESHOLD": {
       "context": "global",
       "default": "0",
-      "help": "When SLACK_ALERT_IPS is set, send one summary notification if this many requests from other IPs are denied within SLACK_UNLISTED_PERIOD (0 to disable).",
+      "help": "When SLACK_ALERT_IPS is set, send one notification for each IP not in the list that is denied this many times within SLACK_UNLISTED_PERIOD (0 to disable).",
       "id": "slack-unlisted-threshold",
       "label": "Unlisted IPs threshold",
       "regex": "^[0-9]+$",
@@ -53,7 +53,7 @@
     "SLACK_UNLISTED_PERIOD": {
       "context": "global",
       "default": "600",
-      "help": "Period in seconds used to count denied requests from IPs not in SLACK_ALERT_IPS.",
+      "help": "Period in seconds used to count denied requests per IP not in SLACK_ALERT_IPS.",
       "id": "slack-unlisted-period",
       "label": "Unlisted IPs period",
       "regex": "^[1-9][0-9]*$",

@@ -2,7 +2,7 @@
   "id": "discord",
   "name": "Discord",
   "description": "Send alerts to a Discord channel (using webhooks).",
-  "version": "1.9.4",
+  "version": "1.9.5",
   "stream": "yes",
   "settings": {
     "USE_DISCORD": {
@@ -44,7 +44,7 @@
     "DISCORD_UNLISTED_THRESHOLD": {
       "context": "global",
       "default": "0",
-      "help": "When DISCORD_ALERT_IPS is set, send one summary notification if this many requests from other IPs are denied within DISCORD_UNLISTED_PERIOD (0 to disable).",
+      "help": "When DISCORD_ALERT_IPS is set, send one notification for each IP not in the list that is denied this many times within DISCORD_UNLISTED_PERIOD (0 to disable).",
       "id": "discord-unlisted-threshold",
       "label": "Unlisted IPs threshold",
       "regex": "^[0-9]+$",
@@ -53,7 +53,7 @@
     "DISCORD_UNLISTED_PERIOD": {
       "context": "global",
       "default": "600",
-      "help": "Period in seconds used to count denied requests from IPs not in DISCORD_ALERT_IPS.",
+      "help": "Period in seconds used to count denied requests per IP not in DISCORD_ALERT_IPS.",
       "id": "discord-unlisted-period",
       "label": "Unlisted IPs period",
       "regex": "^[1-9][0-9]*$",
