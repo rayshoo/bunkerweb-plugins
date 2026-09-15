@@ -628,7 +628,7 @@ function discord:api()
 	-- result is recorded and shown in the deliveries table
 	if self.ctx.bw.uri == "/discord/test" and self.ctx.bw.request_method == "GET" then
 		local hdr = ngx_timer.at(0, self.send, self, {
-			text = "```Test message from BunkerWeb (manual test from the web UI)```",
+			content = "```Test message from BunkerWeb (manual test from the web UI)```",
 		})
 		if not hdr then
 			return self:ret(true, "can't create test timer", HTTP_INTERNAL_SERVER_ERROR)
