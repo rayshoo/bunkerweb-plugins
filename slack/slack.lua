@@ -67,7 +67,7 @@ local function summarize_reason_data(rd)
 			parts[#parts + 1] = label .. ": " .. value
 		end
 	end
-	add("ids", rd.ids)
+	-- ids are already shown in the "Rules" field, so they are omitted here
 	add("msgs", rd.msgs)
 	add("anomaly_score", rd.anomaly_score)
 	add("matched_var_names", rd.matched_var_names)
