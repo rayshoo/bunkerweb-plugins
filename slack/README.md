@@ -83,7 +83,7 @@ metadata:
 | `SLACK_BAN_ALERT`          | `yes`                                  | global    | no       | Send one escalated notification when a watched IP gets banned, and mute its block alerts while banned.                                       |
 | `SLACK_BAN_MENTION`        |                                        | global    | no       | Optional mention added to the ban notification only (e.g. `<!here>` or `<!channel>`). Leave empty to disable.                                 |
 | `SLACK_FORMAT`               | `default`                    | global    | no       | Message format: `default`, `blockkit` or `template`.                                                                                            |
-| `SLACK_TEMPLATE`             |                              | global    | no       | Custom JSON payload used when `SLACK_FORMAT=template` (supports `{{variables}}` and `{#if}` sections).                                        |
+| `SLACK_TEMPLATE`             |                              | global    | no       | Custom JSON payload used when `SLACK_FORMAT=template` (supports `{{variables}}` and `{{#if}}` sections).                                        |
 
 ## Filtering notifications
 

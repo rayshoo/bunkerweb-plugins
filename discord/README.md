@@ -93,7 +93,7 @@ metadata:
 | `DISCORD_BAN_ALERT`          | `yes`                                     | global    | no       | Send one escalated notification when a watched IP gets banned, and mute its block alerts while banned.                                          |
 | `DISCORD_BAN_MENTION`        |                                           | global    | no       | Optional mention added to the ban notification only (e.g. `@here` or `<@&roleID>`). Leave empty to disable.                                      |
 | `DISCORD_FORMAT`               | `default`                    | global    | no       | Message format: `default` or `template`.                                                                                                        |
-| `DISCORD_TEMPLATE`             |                              | global    | no       | Custom JSON payload used when `DISCORD_FORMAT=template` (supports `{{variables}}` and `{#if}` sections).                                        |
+| `DISCORD_TEMPLATE`             |                              | global    | no       | Custom JSON payload used when `DISCORD_FORMAT=template` (supports `{{variables}}` and `{{#if}}` sections).                                        |
 
 ## Filtering notifications
 

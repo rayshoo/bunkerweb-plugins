@@ -82,7 +82,7 @@ metadata:
 | `WEBHOOK_BAN_ALERT`          | `yes`                        | global    | no       | Send one escalated notification when a watched IP gets banned, and mute its block alerts while banned.                                          |
 | `WEBHOOK_BAN_MENTION`        |                              | global    | no       | Optional mention added to the ban notification only. Leave empty to disable.                                                                     |
 | `WEBHOOK_FORMAT`               | `default`                    | global    | no       | Message format: `default`, `structured` or `template`.                                                                                          |
-| `WEBHOOK_TEMPLATE`             |                              | global    | no       | Custom JSON payload used when `WEBHOOK_FORMAT=template` (supports `{{variables}}` and `{#if}` sections).                                        |
+| `WEBHOOK_TEMPLATE`             |                              | global    | no       | Custom JSON payload used when `WEBHOOK_FORMAT=template` (supports `{{variables}}` and `{{#if}}` sections).                                      |
 
 ## Filtering notifications
 
