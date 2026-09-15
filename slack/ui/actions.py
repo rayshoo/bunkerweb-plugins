@@ -70,15 +70,17 @@ def _get_stats(bw_instances_utils):
                 continue
             watched = _alist(data.get("watched_alerts"))
             unlisted = _alist(data.get("unlisted_alerts"))
+            ban = _alist(data.get("ban_alerts"))
             if data["source"] == "redis":
-                return data | {"watched_alerts": watched, "unlisted_alerts": unlisted}
+                return data | {"watched_alerts": watched, "unlisted_alerts": unlisted, "ban_alerts": ban}
             if stats is None:
-                stats = data | {"watched_alerts": list(watched), "unlisted_alerts": list(unlisted)}
+                stats = data | {"watched_alerts": list(watched), "unlisted_alerts": list(unlisted), "ban_alerts": list(ban)}
                 continue
             stats["watched_alerts"].extend(watched)
             stats["unlisted_alerts"].extend(unlisted)
+            stats["ban_alerts"].extend(ban)
     if stats:
-        for key in ("watched_alerts", "unlisted_alerts"):
+        for key in ("watched_alerts", "unlisted_alerts", "ban_alerts"):
             stats[key] = sorted(stats[key], key=lambda alert: alert.get("date", 0), reverse=True)[:ALERTS_MAX]
     return stats
 
@@ -185,6 +187,7 @@ def pre_render(**kwargs):
         )
         alerts = stats.get("watched_alerts", [])
         unlisted_alerts = stats.get("unlisted_alerts", [])
+        ban_alerts = stats.get("ban_alerts", [])
 
         # One row per entry of the watched list with its current ban status and its last notified request
         entries = _parse_entries(stats.get("alert_ips"))
@@ -242,6 +245,21 @@ def pre_render(**kwargs):
                     "Reason": [str(alert.get("reason", "")) for alert in unlisted_alerts],
                 }
                 if unlisted_alerts
+                else {}
+            ),
+            "col-size": "col-12",
+        }
+
+        ret["list_watched_ip_ban_alerts"] = {
+            "data": (
+                {
+                    "Date": [_format_date(alert.get("date")) for alert in ban_alerts],
+                    "IP": [str(alert.get("ip", "")) for alert in ban_alerts],
+                    "Duration": ["permanent" if not alert.get("ttl") else _format_duration(alert.get("ttl")) for alert in ban_alerts],
+                    "Server name": [str(alert.get("server_name", "")) for alert in ban_alerts],
+                    "Reason": [str(alert.get("reason", "")) for alert in ban_alerts],
+                }
+                if ban_alerts
                 else {}
             ),
             "col-size": "col-12",

@@ -80,6 +80,8 @@ metadata:
 | `SLACK_ALERT_IPS`          |                                        | global    | no       | Only notify denied requests from these IPs/networks (separated with spaces, CIDR allowed). Leave empty to notify every denied request.       |
 | `SLACK_UNLISTED_THRESHOLD` | `0`                                    | global    | no       | When `SLACK_ALERT_IPS` is set, send one summary notification if this many requests from other IPs are denied within `SLACK_UNLISTED_PERIOD` (`0` to disable). |
 | `SLACK_UNLISTED_PERIOD`    | `600`                                  | global    | no       | Period in seconds used to count denied requests from IPs not in `SLACK_ALERT_IPS`.                                                           |
+| `SLACK_BAN_ALERT`          | `yes`                                  | global    | no       | Send one escalated notification when a watched IP gets banned, and mute its block alerts while banned.                                       |
+| `SLACK_BAN_MENTION`        |                                        | global    | no       | Optional mention added to the ban notification only (e.g. `<!here>` or `<!channel>`). Leave empty to disable.                                 |
 
 ## Filtering notifications
 
@@ -95,6 +97,8 @@ With the configuration above, denied requests from `10.0.0.5` and `10.0.1.0/24` 
 
 When `USE_REDIS` is set to `yes`, the counter of denied requests from unlisted IPs is shared between all BunkerWeb instances through Redis. Otherwise each instance counts on its own.
 
+When a watched IP is actually **banned** (added to the ban list, e.g. by bad-behavior), a single escalated notification is sent instead of a block alert, and further block alerts for that IP are muted until the ban ends. Set `SLACK_BAN_ALERT` to `no` to disable it, and `SLACK_BAN_MENTION` (e.g. `<!here>`/`<!channel>`) to ping on ban only.
+
 ## Web UI
 
 The plugin page of the web UI shows :
@@ -102,6 +106,7 @@ The plugin page of the web UI shows :
 - the IP filter status (`SLACK_ALERT_IPS`, `SLACK_UNLISTED_THRESHOLD` and `SLACK_UNLISTED_PERIOD`)
 - the IPs/networks of `SLACK_ALERT_IPS` with their ban status and last notified request
 - the IPs not in `SLACK_ALERT_IPS` that crossed the threshold (one alert per IP per period)
+- the watched IPs that got **banned** (one escalated alert per ban, block alerts muted while banned)
 - the IPs of `SLACK_ALERT_IPS` that are currently banned
 - the last notified denied requests from IPs of `SLACK_ALERT_IPS`
 

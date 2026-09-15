@@ -21,6 +21,7 @@ local http_new = http.new
 local has_variable = utils.has_variable
 local get_variable = utils.get_variable
 local get_reason = utils.get_reason
+local is_banned = utils.is_banned
 local tostring = tostring
 local tonumber = tonumber
 local encode = cjson.encode
@@ -34,6 +35,8 @@ local shared_datastore = ngx.shared.datastore or ngx.shared.datastore_stream
 local UNLISTED_COUNTER_PREFIX = "plugin_webhook_unlisted_count_"
 local WATCHED_ALERTS_KEY = "plugin_webhook_watched_alerts"
 local UNLISTED_ALERTS_KEY = "plugin_webhook_unlisted_alerts"
+local BAN_ALERTS_KEY = "plugin_webhook_ban_alerts"
+local BAN_ALERTED_PREFIX = "plugin_webhook_ban_alerted_"
 local ALERTS_MAX = 20
 
 -- Per-worker cache of the ipmatcher built from WEBHOOK_ALERT_IPS
@@ -148,6 +151,31 @@ function webhook:push_alert(list_key, alert)
 	shared_datastore:set(list_key .. "_" .. tostring(idx % ALERTS_MAX), value)
 end
 
+-- Marks that a ban alert was already sent for this IP, returns true only the first time (per ban)
+-- The mark expires with the ban so a later re-ban notifies again
+function webhook:mark_ban_alerted(ip, ttl)
+	local key = BAN_ALERTED_PREFIX .. ip
+	local expire = (ttl and ttl > 0) and ttl or 86400
+	if self.use_redis then
+		local cs = clusterstore:new()
+		local ok, err = cs:connect()
+		if ok then
+			local ret
+			ret, err = cs:call("set", key, "1", "NX", "EX", expire)
+			cs:close()
+			if ret ~= nil then
+				return ret ~= ngx.null -- "OK" when set, ngx.null when it already existed
+			end
+		end
+		self.logger:log(ERR, "can't mark ban alert on redis, falling back to local : " .. tostring(err))
+	end
+	if not shared_datastore then
+		return true
+	end
+	local ok = shared_datastore:add(key, "1", expire) -- add sets only if the key is absent
+	return ok == true
+end
+
 -- Reads a capped list of notifications, newest first
 function webhook:read_alerts(cs, list_key)
 	local alerts = {}
@@ -190,6 +218,7 @@ function webhook:get_stats()
 		period = tonumber(self.variables["WEBHOOK_UNLISTED_PERIOD"]) or 600,
 		watched_alerts = {},
 		unlisted_alerts = {},
+		ban_alerts = {},
 	}
 	if self.use_redis then
 		local cs = clusterstore:new()
@@ -198,6 +227,7 @@ function webhook:get_stats()
 			stats.source = "redis"
 			stats.watched_alerts = self:read_alerts(cs, WATCHED_ALERTS_KEY)
 			stats.unlisted_alerts = self:read_alerts(cs, UNLISTED_ALERTS_KEY)
+			stats.ban_alerts = self:read_alerts(cs, BAN_ALERTS_KEY)
 			cs:close()
 			return stats
 		end
@@ -205,6 +235,7 @@ function webhook:get_stats()
 	end
 	stats.watched_alerts = self:read_alerts(nil, WATCHED_ALERTS_KEY)
 	stats.unlisted_alerts = self:read_alerts(nil, UNLISTED_ALERTS_KEY)
+	stats.ban_alerts = self:read_alerts(nil, BAN_ALERTS_KEY)
 	return stats
 end
 function webhook:log(bypass_use_webhook)
@@ -285,6 +316,38 @@ end
 
 -- luacheck: ignore 212
 function webhook.watched(premature, self, data, alert)
+	-- A watched IP that is actually banned is a critical event : notify once per ban (with an
+	-- optional mention) and suppress the per-request block alerts while the ban lasts
+	if self.variables["WEBHOOK_BAN_ALERT"] == "yes" then
+		local banned, _, ttl = is_banned(alert.ip, alert.server_name)
+		if banned then
+			if self:mark_ban_alerted(alert.ip, ttl) then
+				local duration = (ttl == nil or ttl == 0) and "permanent" or (tostring(ttl) .. "s")
+				self:push_alert(BAN_ALERTS_KEY, {
+					date = ngx_now(),
+					ip = alert.ip,
+					reason = alert.reason,
+					server_name = alert.server_name,
+					ttl = ttl or 0,
+				})
+				local mention = self.variables["WEBHOOK_BAN_MENTION"] or ""
+				webhook.send(premature, self, {
+					content = (mention ~= "" and (mention .. "\n") or "")
+						.. "🚫 A watched IP is BANNED (WEBHOOK_ALERT_IPS)\n```IP "
+						.. alert.ip
+						.. " is banned ("
+						.. duration
+						.. ") on "
+						.. tostring(alert.server_name)
+						.. " (reason = "
+						.. alert.reason
+						.. "). This is one of your own servers.```",
+				})
+			end
+			-- Banned : do not send the normal block alert (avoids flooding while banned)
+			return
+		end
+	end
 	self:push_alert(WATCHED_ALERTS_KEY, alert)
 	webhook.send(premature, self, data)
 end

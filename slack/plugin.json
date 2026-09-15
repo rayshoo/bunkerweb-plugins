@@ -2,7 +2,7 @@
   "id": "slack",
   "name": "Slack",
   "description": "Send alerts to a Slack channel (using webhooks).",
-  "version": "1.9.5",
+  "version": "1.9.6",
   "stream": "partial",
   "settings": {
     "USE_SLACK": {
@@ -57,6 +57,24 @@
       "id": "slack-unlisted-period",
       "label": "Unlisted IPs period",
       "regex": "^[1-9][0-9]*$",
+      "type": "text"
+    },
+    "SLACK_BAN_ALERT": {
+      "context": "global",
+      "default": "yes",
+      "help": "When SLACK_ALERT_IPS is set, send one escalated notification when a watched IP gets banned (added to the ban list), and mute the per-request block alerts for it while the ban lasts.",
+      "id": "slack-ban-alert",
+      "label": "Alert on watched IP ban",
+      "regex": "^(yes|no)$",
+      "type": "check"
+    },
+    "SLACK_BAN_MENTION": {
+      "context": "global",
+      "default": "",
+      "help": "Optional mention prepended to the ban notification only (e.g. <!here> or <!channel> for Slack). Leave empty to disable.",
+      "id": "slack-ban-mention",
+      "label": "Ban alert mention",
+      "regex": "^.*$",
       "type": "text"
     }
   }

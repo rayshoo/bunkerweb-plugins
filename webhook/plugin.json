@@ -2,7 +2,7 @@
   "id": "webhook",
   "name": "WebHook",
   "description": "Send alerts to a custom webhook.",
-  "version": "1.9.5",
+  "version": "1.9.6",
   "stream": "yes",
   "settings": {
     "USE_WEBHOOK": {
@@ -57,6 +57,24 @@
       "id": "webhook-unlisted-period",
       "label": "Unlisted IPs period",
       "regex": "^[1-9][0-9]*$",
+      "type": "text"
+    },
+    "WEBHOOK_BAN_ALERT": {
+      "context": "global",
+      "default": "yes",
+      "help": "When WEBHOOK_ALERT_IPS is set, send one escalated notification when a watched IP gets banned (added to the ban list), and mute the per-request block alerts for it while the ban lasts.",
+      "id": "webhook-ban-alert",
+      "label": "Alert on watched IP ban",
+      "regex": "^(yes|no)$",
+      "type": "check"
+    },
+    "WEBHOOK_BAN_MENTION": {
+      "context": "global",
+      "default": "",
+      "help": "Optional mention prepended to the ban notification only (e.g. left empty for a generic webhook). Leave empty to disable.",
+      "id": "webhook-ban-mention",
+      "label": "Ban alert mention",
+      "regex": "^.*$",
       "type": "text"
     }
   }
