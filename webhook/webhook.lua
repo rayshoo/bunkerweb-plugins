@@ -374,7 +374,7 @@ end
 
 -- Returns the payload for an event : a raw JSON string when a valid custom template is set,
 -- Predefined structured JSON payload (a generic webhook consumer can parse the fields directly)
-function webhook:blockkit_message(event, info)
+function webhook:structured_message(event, info)
 	local v = self:build_vars(event, info)
 	return {
 		event = event,
@@ -395,7 +395,7 @@ function webhook:blockkit_message(event, info)
 	}
 end
 
--- otherwise the built-in table (default / blockkit). Invalid templates fall back and are recorded.
+-- otherwise the built-in table (default / structured). Invalid templates fall back and are recorded.
 function webhook:format_message(event, info)
 	local format = self.variables["WEBHOOK_FORMAT"] or "default"
 	if format == "template" then
@@ -408,8 +408,8 @@ function webhook:format_message(event, info)
 			self.logger:log(ERR, "WEBHOOK_TEMPLATE produced invalid JSON, falling back to the default format")
 			self:record_delivery(false, nil, "invalid WEBHOOK_TEMPLATE JSON (fell back to default)", truncate(rendered, RESPONSE_MAX))
 		end
-	elseif format == "blockkit" then
-		return self:blockkit_message(event, info)
+	elseif format == "structured" then
+		return self:structured_message(event, info)
 	end
 	return self:default_message(event, info)
 end

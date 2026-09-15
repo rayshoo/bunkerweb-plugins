@@ -89,14 +89,14 @@
     "WEBHOOK_FORMAT": {
       "context": "global",
       "default": "default",
-      "help": "Message format: 'default' (built-in), 'blockkit' (predefined rich layout) or 'template' (custom, uses WEBHOOK_TEMPLATE).",
+      "help": "Message format: 'default' (built-in text payload), 'structured' (predefined field-based JSON) or 'template' (custom, uses WEBHOOK_TEMPLATE).",
       "id": "webhook-format",
       "label": "Message format",
-      "regex": "^(default|blockkit|template)$",
+      "regex": "^(default|structured|template)$",
       "type": "select",
       "select": [
         "default",
-        "blockkit",
+        "structured",
         "template"
       ]
     },

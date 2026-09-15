@@ -403,7 +403,7 @@ function discord:default_message(event, info)
 end
 
 -- Returns the payload for an event : a raw JSON string when a valid custom template is set,
--- otherwise the built-in table (default / blockkit). Invalid templates fall back and are recorded.
+-- otherwise the built-in table (default embed). Invalid templates fall back and are recorded.
 function discord:format_message(event, info)
 	local format = self.variables["DISCORD_FORMAT"] or "default"
 	if format == "template" then

@@ -80,14 +80,13 @@
     "DISCORD_FORMAT": {
       "context": "global",
       "default": "default",
-      "help": "Message format: 'default' (built-in), 'blockkit' (predefined rich layout) or 'template' (custom, uses DISCORD_TEMPLATE).",
+      "help": "Message format: 'default' (built-in rich embed) or 'template' (custom, uses DISCORD_TEMPLATE).",
       "id": "discord-format",
       "label": "Message format",
-      "regex": "^(default|blockkit|template)$",
+      "regex": "^(default|template)$",
       "type": "select",
       "select": [
         "default",
-        "blockkit",
         "template"
       ]
     },

@@ -81,7 +81,7 @@ metadata:
 | `WEBHOOK_UNLISTED_PERIOD`    | `600`                        | global    | no       | Period in seconds used to count denied requests from IPs not in `WEBHOOK_ALERT_IPS`.                                                             |
 | `WEBHOOK_BAN_ALERT`          | `yes`                        | global    | no       | Send one escalated notification when a watched IP gets banned, and mute its block alerts while banned.                                          |
 | `WEBHOOK_BAN_MENTION`        |                              | global    | no       | Optional mention added to the ban notification only. Leave empty to disable.                                                                     |
-| `WEBHOOK_FORMAT`               | `default`                    | global    | no       | Message format: `default`, `blockkit` or `template`.                                                                                            |
+| `WEBHOOK_FORMAT`               | `default`                    | global    | no       | Message format: `default`, `structured` or `template`.                                                                                          |
 | `WEBHOOK_TEMPLATE`             |                              | global    | no       | Custom JSON payload used when `WEBHOOK_FORMAT=template` (supports `{{variables}}` and `{#if}` sections).                                        |
 
 ## Filtering notifications
@@ -104,8 +104,8 @@ When a watched IP is actually **banned** (added to the ban list, e.g. by bad-beh
 
 `WEBHOOK_FORMAT` selects how notifications look:
 
-- `default` : the built-in message (no template knowledge required)
-- `blockkit` : a predefined rich layout
+- `default` : the built-in text payload (no template knowledge required)
+- `structured` : a predefined field-based JSON payload (a generic consumer can parse the fields directly)
 - `template` : a fully custom payload from `WEBHOOK_TEMPLATE`
 
 In `template` mode, `WEBHOOK_TEMPLATE` is a raw JSON payload that supports `{{variables}}` and `{{#if var}}...{{/if}}` sections. Values are JSON-escaped and the rendered result must be valid JSON; if it isn't, the plugin falls back to the default format and records the error (visible in the web UI). One template covers every event (block / ban / unlisted) via the normalized variables below.
