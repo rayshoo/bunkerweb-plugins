@@ -10,7 +10,7 @@
 
     <div class="row g-3 mb-3">
         <div class="col-12 col-md-3">
-            <div class="card p-3 h-100 shadow-sm rounded-3">
+            <div class="card p-3 h-100 shadow-sm rounded-3 text-center">
                 <h6 class="text-muted mb-1">STATUS</h6>
                 <span class="fw-bold text-{{ 'success' if raw.ping in ['success','up','yes','true'] else 'danger' }}">
                     {{ 'Active' if raw.ping in ['success','up','yes','true'] else 'Inactive' }}
@@ -18,13 +18,13 @@
             </div>
         </div>
         <div class="col-12 col-md-3">
-            <div class="card p-3 h-100 shadow-sm rounded-3">
+            <div class="card p-3 h-100 shadow-sm rounded-3 text-center">
                 <h6 class="text-muted mb-1">FORMAT</h6>
                 <span class="fw-bold">{{ raw.format }}</span>
             </div>
         </div>
         <div class="col-12 col-md-3">
-            <div class="card p-3 h-100 shadow-sm rounded-3">
+            <div class="card p-3 h-100 shadow-sm rounded-3 text-center">
                 <h6 class="text-muted mb-1">IP FILTER</h6>
                 {% if raw.watched_count > 0 %}
                 <span class="fw-bold">{{ raw.watched_count }} watched</span>
@@ -38,7 +38,7 @@
             </div>
         </div>
         <div class="col-12 col-md-3">
-            <div class="card p-3 h-100 shadow-sm rounded-3 d-flex flex-column justify-content-between">
+            <div class="card p-3 h-100 shadow-sm rounded-3 text-center d-flex flex-column justify-content-between">
                 <h6 class="text-muted mb-1">TEST</h6>
                 <form method="post" action="">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

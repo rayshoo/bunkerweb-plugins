@@ -225,6 +225,8 @@ def pre_render(**kwargs):
         if not stats:
             return ret
 
+        deliveries = stats.get("deliveries", [])
+
         # Raw data for the custom UI template (ui/template.html)
         try:
             ret["raw"] = _build_raw(stats, kwargs["bw_instances_utils"], ret["ping_status"]["value"])
@@ -241,7 +243,6 @@ def pre_render(**kwargs):
         }
 
         # Webhook delivery results (shown regardless of the IP filter)
-        deliveries = stats.get("deliveries", [])
         if deliveries:
             last = deliveries[0]
             ret["info_last_delivery"] = {
@@ -380,11 +381,14 @@ def pre_render(**kwargs):
 
 
 def discord(**kwargs):
-    # Triggered by the "Send test" button (POST). Asks the instances to send a test notification
-    # through the normal path so the result lands in the deliveries table.
+    # Triggered by the "Send test" button (POST). Sends a single test notification through the
+    # normal path (one instance only, not every instance) so the result lands in the deliveries table.
     logger = getLogger("UI")
     try:
-        kwargs["bw_instances_utils"].get_data(f"{PLUGIN_ID}/test")
+        instances = kwargs["bw_instances_utils"].get_instances(status="up")
+        if not instances:
+            return {"status": "ko", "message": "No reachable instance to send the test"}
+        instances[0].data(f"{PLUGIN_ID}/test")
     except BaseException as e:
         logger.debug(format_exc())
         logger.error(f"Failed to send {PLUGIN_ID} test: {e}")
