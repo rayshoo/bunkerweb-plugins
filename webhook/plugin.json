@@ -2,7 +2,7 @@
   "id": "webhook",
   "name": "WebHook",
   "description": "Send alerts to a custom webhook.",
-  "version": "1.9.11",
+  "version": "1.9.12",
   "stream": "yes",
   "settings": {
     "USE_WEBHOOK": {
@@ -20,6 +20,15 @@
       "help": "Address of the webhook.",
       "id": "webhook-url",
       "label": "Webhook URL",
+      "regex": "^.*$",
+      "type": "text"
+    },
+    "WEBHOOK_HTTP_HEADERS": {
+      "context": "global",
+      "default": "",
+      "help": "Extra HTTP headers to send with the webhook request, one \"Name: value\" per line (e.g. an Authorization token or a shared secret). Leave empty for none.",
+      "id": "webhook-http-headers",
+      "label": "Extra HTTP headers",
       "regex": "^.*$",
       "type": "text"
     },

@@ -552,6 +552,19 @@ function webhook:record_delivery(ok, status, err, body, resp_headers)
 		response_headers = truncate(headers_str, RESPONSE_MAX),
 	})
 end
+-- Request headers : Content-Type plus any user-provided headers (auth token, secret, ...)
+-- from WEBHOOK_HTTP_HEADERS, one "Name: value" per line
+function webhook:build_headers()
+	local headers = { ["Content-Type"] = "application/json" }
+	for line in (self.variables["WEBHOOK_HTTP_HEADERS"] or ""):gmatch("[^\n]+") do
+		local name, value = line:match("^%s*([^:%s]+)%s*:%s*(.-)%s*$")
+		if name then
+			headers[name] = value
+		end
+	end
+	return headers
+end
+
 function webhook.send(premature, self, data)
 	local httpc, err = http_new()
 	if not httpc then
@@ -559,11 +572,9 @@ function webhook.send(premature, self, data)
 		self:record_delivery(false, nil, "can't instantiate http object : " .. tostring(err), nil)
 		return
 	end
-	local res, err_http = httpc:request_uri(self.variables["WEBHOOK_WEBHOOK_URL"], {
+	local res, err_http = httpc:request_uri(self.variables["WEBHOOK_URL"], {
 		method = "POST",
-		headers = {
-			["Content-Type"] = "application/json",
-		},
+		headers = self:build_headers(),
 		-- data is a raw JSON string when rendered from a custom template, a table otherwise
 		body = (type(data) == "string") and data or encode(data),
 	})
@@ -650,9 +661,7 @@ function webhook:api()
 		end
 		local res, err_http = httpc:request_uri(self.variables["WEBHOOK_URL"], {
 			method = "POST",
-			headers = {
-				["Content-Type"] = "application/json",
-			},
+			headers = self:build_headers(),
 			body = encode(data),
 		})
 		httpc:close()
