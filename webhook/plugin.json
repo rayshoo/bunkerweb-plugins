@@ -2,7 +2,7 @@
   "id": "webhook",
   "name": "WebHook",
   "description": "Send alerts to a custom webhook.",
-  "version": "1.9.12",
+  "version": "1.9.13",
   "stream": "yes",
   "settings": {
     "USE_WEBHOOK": {
@@ -30,7 +30,7 @@
       "id": "webhook-http-headers",
       "label": "Extra HTTP headers",
       "regex": "^.*$",
-      "type": "text"
+      "type": "password"
     },
     "WEBHOOK_RETRY_IF_LIMITED": {
       "context": "global",
