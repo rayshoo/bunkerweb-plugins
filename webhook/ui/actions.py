@@ -130,6 +130,75 @@ def _get_bans(bw_instances_utils):
     return list(unique_bans.values())
 
 
+def _build_raw(stats, bw_instances_utils, ping):
+    """All data the custom UI template needs, normalized for direct rendering"""
+    networks = _parse_networks(stats.get("alert_ips"))
+    banned = (
+        sorted(
+            (b for b in _get_bans(bw_instances_utils) if _in_networks(b.get("ip"), networks)),
+            key=lambda b: b.get("date", 0) or 0,
+            reverse=True,
+        )
+        if networks
+        else []
+    )
+    watched_alerts = stats.get("watched_alerts", [])
+    watched_ips = []
+    for entry, network in _parse_entries(stats.get("alert_ips")):
+        entry_bans = sorted({b.get("ip") for b in banned if _in_networks(b.get("ip"), [network])})
+        status = f"Banned ({', '.join(entry_bans)})" if (network.num_addresses > 1 and entry_bans) else ("Banned" if entry_bans else "OK")
+        entry_alert = next((a for a in watched_alerts if _in_networks(a.get("ip"), [network])), None)
+        watched_ips.append({"entry": entry, "status": status, "last_alert": _format_local_date(entry_alert.get("date")) if entry_alert else "-"})
+
+    def clean(alerts, fields):
+        return [{f: (_format_local_date(a.get("date")) if f == "date" else str(a.get(f, ""))) for f in fields} for a in alerts]
+
+    return {
+        "ping": ping,
+        "format": str(stats.get("format") or "default"),
+        "alert_ips": stats.get("alert_ips") or "",
+        "watched_count": len(networks),
+        "threshold": int(stats.get("threshold") or 0),
+        "period": int(stats.get("period") or 0),
+        "period_human": _format_duration(int(stats.get("period") or 0)),
+        "deliveries": [
+            {
+                "date": _format_local_date(d.get("date")),
+                "ok": bool(d.get("ok")),
+                "status": d.get("status") or "",
+                "error": d.get("error") or "",
+                "response": d.get("response") or "",
+                "response_headers": d.get("response_headers") or "",
+            }
+            for d in stats.get("deliveries", [])
+        ],
+        "watched_ips": watched_ips,
+        "banned": [
+            {
+                "date": _format_local_date(b.get("date")),
+                "ip": str(b.get("ip", "")),
+                "scope": str(b.get("ban_scope", "")),
+                "service": str(b.get("service", "_")),
+                "reason": str(b.get("reason", "")),
+                "expires": "permanent" if b.get("permanent") else _format_duration(b.get("exp")),
+            }
+            for b in banned
+        ],
+        "watched_alerts": clean(watched_alerts, ("date", "ip", "reason", "server_name")),
+        "unlisted_alerts": clean(stats.get("unlisted_alerts", []), ("date", "ip", "count", "reason")),
+        "ban_alerts": [
+            {
+                "date": _format_local_date(a.get("date")),
+                "ip": str(a.get("ip", "")),
+                "duration": "permanent" if not a.get("ttl") else _format_duration(a.get("ttl")),
+                "server_name": str(a.get("server_name", "")),
+                "reason": str(a.get("reason", "")),
+            }
+            for a in stats.get("ban_alerts", [])
+        ],
+    }
+
+
 def pre_render(**kwargs):
     logger = getLogger("UI")
     ret = {
@@ -155,6 +224,13 @@ def pre_render(**kwargs):
         stats = _get_stats(kwargs["bw_instances_utils"])
         if not stats:
             return ret
+
+        # Raw data for the custom UI template (ui/template.html)
+        try:
+            ret["raw"] = _build_raw(stats, kwargs["bw_instances_utils"], ret["ping_status"]["value"])
+        except BaseException as e:
+            logger.debug(format_exc())
+            logger.error(f"Failed to build {PLUGIN_ID} raw data: {e}")
 
         ret["info_format"] = {
             "title": "FORMAT",
@@ -208,7 +284,7 @@ def pre_render(**kwargs):
                 if threshold > 0
                 else "Unlisted IPs : not notified"
             ),
-            "col-size": "col-12 col-md-6",
+            "col-size": "col-12 col-md-4",
             "card-classes": "h-100",
         }
 
@@ -304,4 +380,13 @@ def pre_render(**kwargs):
 
 
 def webhook(**kwargs):
-    pass
+    # Triggered by the "Send test" button (POST). Asks the instances to send a test notification
+    # through the normal path so the result lands in the deliveries table.
+    logger = getLogger("UI")
+    try:
+        kwargs["bw_instances_utils"].get_data(f"{PLUGIN_ID}/test")
+    except BaseException as e:
+        logger.debug(format_exc())
+        logger.error(f"Failed to send {PLUGIN_ID} test: {e}")
+        return {"status": "ko", "message": f"Failed to send test: {e}"}
+    return {"message": "Test notification sent, check the deliveries below."}

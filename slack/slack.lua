@@ -589,13 +589,23 @@ function slack.unlisted(premature, self, info)
 end
 
 -- Records the outcome of a webhook delivery so it can be shown in the web UI
-function slack:record_delivery(ok, status, err, body)
+function slack:record_delivery(ok, status, err, body, resp_headers)
+	local headers_str = ""
+	if type(resp_headers) == "table" then
+		for name, value in pairs(resp_headers) do
+			if type(value) == "table" then
+				value = table.concat(value, ", ")
+			end
+			headers_str = headers_str .. name .. ": " .. tostring(value) .. "\n"
+		end
+	end
 	self:push_alert(DELIVERIES_KEY, {
 		date = ngx_now(),
 		ok = ok and true or false,
 		status = status or 0,
 		error = err and truncate(err, RESPONSE_MAX) or "",
 		response = body and truncate(body, RESPONSE_MAX) or "",
+		response_headers = truncate(headers_str, RESPONSE_MAX),
 	})
 end
 
@@ -633,11 +643,11 @@ function slack.send(premature, self, data)
 	end
 	if res.status < 200 or res.status > 299 then
 		self.logger:log(ERR, "request returned status " .. tostring(res.status))
-		self:record_delivery(false, res.status, nil, res.body)
+		self:record_delivery(false, res.status, nil, res.body, res.headers)
 		return
 	end
 	self.logger:log(INFO, "request sent to webhook")
-	self:record_delivery(true, res.status, nil, res.body)
+	self:record_delivery(true, res.status, nil, res.body, res.headers)
 end
 
 function slack:log_default()
@@ -664,6 +674,17 @@ end
 function slack:api()
 	if self.ctx.bw.uri == "/slack/stats" and self.ctx.bw.request_method == "GET" then
 		return self:ret(true, self:get_stats(), HTTP_OK)
+	end
+	-- Manual test from the web UI : sends a test notification through the normal path so the
+	-- result is recorded and shown in the deliveries table
+	if self.ctx.bw.uri == "/slack/test" and self.ctx.bw.request_method == "GET" then
+		local hdr = ngx_timer.at(0, self.send, self, {
+			text = "```Test message from BunkerWeb (manual test from the web UI)```",
+		})
+		if not hdr then
+			return self:ret(true, "can't create test timer", HTTP_INTERNAL_SERVER_ERROR)
+		end
+		return self:ret(true, "test scheduled", HTTP_OK)
 	end
 	if self.ctx.bw.uri == "/slack/ping" and self.ctx.bw.request_method == "POST" then
 		-- Check slack connection
