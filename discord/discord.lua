@@ -340,11 +340,12 @@ function discord:log(bypass_use_discord)
 			count = count + 1
 		end
 		if count > 23 then
-			data.embeds[1].description = "Headers :\n```"
+			local desc = "Headers :\n"
 			for header, value in pairs(headers) do
-				data.embeds[1].description = data.embeds[1].description .. header .. ": " .. value .. "\n"
+				desc = desc .. header .. ": " .. value .. "\n"
 			end
-			data.embeds[1].description = data.embeds[1].description .. "```"
+			-- Discord caps the description at 4096 chars, keep it well under and inside the code block
+			data.embeds[1].description = "```" .. formatField(desc) .. "```"
 		else
 			for header, value in pairs(headers) do
 				table.insert(data.embeds[1].fields, {

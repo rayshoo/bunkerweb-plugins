@@ -37,6 +37,18 @@ local WATCHED_ALERTS_KEY = "plugin_slack_watched_alerts"
 local UNLISTED_ALERTS_KEY = "plugin_slack_unlisted_alerts"
 local BAN_ALERTS_KEY = "plugin_slack_ban_alerts"
 local BAN_ALERTED_PREFIX = "plugin_slack_ban_alerted_"
+-- Slack silently splits or drops oversized messages, which breaks the code block ; keep it bounded
+local MESSAGE_MAX = 3000
+local REASON_DATA_MAX = 800
+
+-- Truncates a string to at most max characters, adding a marker when cut
+local function truncate(str, max)
+	str = tostring(str or "")
+	if #str > max then
+		return str:sub(1, max) .. "…(truncated)"
+	end
+	return str
+end
 local ALERTS_MAX = 20
 
 -- Per-worker cache of the ipmatcher built from SLACK_ALERT_IPS
@@ -275,27 +287,26 @@ function slack:log(bypass_use_slack)
 		watched = true
 		prefix = ":rotating_light: *Denied request from a watched IP (SLACK_ALERT_IPS)*\n"
 	end
-	-- Compute data
-	local data = {}
-	data.text = prefix
-		.. "```Denied request for IP "
+	-- Compute data (body is kept inside a single code block, bounded so Slack never splits it)
+	local body = "Denied request for IP "
 		.. self.ctx.bw.remote_addr
 		.. " (reason = "
 		.. reason
 		.. " / reason data = "
-		.. encode(reason_data or {})
+		.. truncate(encode(reason_data or {}), REASON_DATA_MAX)
 		.. ").\n\nRequest data :\n\n"
-		.. ngx.var.request
+		.. (ngx.var.request or "")
 		.. "\n"
 	local headers, err = ngx_req.get_headers()
 	if not headers then
-		data.text = data.text .. "error while getting headers : " .. err
+		body = body .. "error while getting headers : " .. err
 	else
 		for header, value in pairs(headers) do
-			data.text = data.text .. header .. ": " .. value .. "\n"
+			body = body .. header .. ": " .. value .. "\n"
 		end
 	end
-	data.text = data.text .. "```"
+	local data = {}
+	data.text = prefix .. "```" .. truncate(body, MESSAGE_MAX) .. "```"
 	-- Send request
 	local hdr
 	if watched then

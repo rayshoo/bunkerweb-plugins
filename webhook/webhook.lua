@@ -37,6 +37,18 @@ local WATCHED_ALERTS_KEY = "plugin_webhook_watched_alerts"
 local UNLISTED_ALERTS_KEY = "plugin_webhook_unlisted_alerts"
 local BAN_ALERTS_KEY = "plugin_webhook_ban_alerts"
 local BAN_ALERTED_PREFIX = "plugin_webhook_ban_alerted_"
+-- Keep the message bounded so the remote endpoint never splits it (which breaks the code block)
+local MESSAGE_MAX = 3000
+local REASON_DATA_MAX = 800
+
+-- Truncates a string to at most max characters, adding a marker when cut
+local function truncate(str, max)
+	str = tostring(str or "")
+	if #str > max then
+		return str:sub(1, max) .. "…(truncated)"
+	end
+	return str
+end
 local ALERTS_MAX = 20
 
 -- Per-worker cache of the ipmatcher built from WEBHOOK_ALERT_IPS
@@ -275,26 +287,26 @@ function webhook:log(bypass_use_webhook)
 		prefix = "🚨 Denied request from a watched IP (WEBHOOK_ALERT_IPS)\n"
 	end
 	-- Compute data
-	local data = {}
-	data.content = prefix
-		.. "```Denied request for IP "
+	-- Body kept inside a single code block, bounded so the remote endpoint never splits it
+	local body = "Denied request for IP "
 		.. self.ctx.bw.remote_addr
 		.. " (reason = "
 		.. reason
 		.. " / reason data = "
-		.. encode(reason_data or {})
+		.. truncate(encode(reason_data or {}), REASON_DATA_MAX)
 		.. ").\n\nRequest data :\n\n"
-		.. ngx.var.request
+		.. (ngx.var.request or "")
 		.. "\n"
 	local headers, err = ngx_req.get_headers()
 	if not headers then
-		data.content = data.content .. "error while getting headers : " .. err
+		body = body .. "error while getting headers : " .. err
 	else
 		for header, value in pairs(headers) do
-			data.content = data.content .. header .. ": " .. value .. "\n"
+			body = body .. header .. ": " .. value .. "\n"
 		end
 	end
-	data.content = data.content .. "```"
+	local data = {}
+	data.content = prefix .. "```" .. truncate(body, MESSAGE_MAX) .. "```"
 	-- Send request
 	local hdr
 	if watched then
