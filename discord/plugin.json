@@ -2,7 +2,7 @@
   "id": "discord",
   "name": "Discord",
   "description": "Send alerts to a Discord channel (using webhooks).",
-  "version": "1.9.8",
+  "version": "1.9.9",
   "stream": "yes",
   "settings": {
     "USE_DISCORD": {
@@ -74,6 +74,29 @@
       "help": "Optional mention prepended to the ban notification only (e.g. @here or <@&roleID> for Discord). Leave empty to disable.",
       "id": "discord-ban-mention",
       "label": "Ban alert mention",
+      "regex": "^.*$",
+      "type": "text"
+    },
+    "DISCORD_FORMAT": {
+      "context": "global",
+      "default": "default",
+      "help": "Message format: 'default' (built-in), 'blockkit' (predefined rich layout) or 'template' (custom, uses DISCORD_TEMPLATE).",
+      "id": "discord-format",
+      "label": "Message format",
+      "regex": "^(default|blockkit|template)$",
+      "type": "select",
+      "select": [
+        "default",
+        "blockkit",
+        "template"
+      ]
+    },
+    "DISCORD_TEMPLATE": {
+      "context": "global",
+      "default": "",
+      "help": "Custom notification payload (raw JSON) used when DISCORD_FORMAT=template. Supports {{variables}} and {{#if var}}...{{/if}} sections; values are JSON-escaped and the result must be valid JSON (falls back to default if not).",
+      "id": "discord-template",
+      "label": "Custom template",
       "regex": "^.*$",
       "type": "text"
     }

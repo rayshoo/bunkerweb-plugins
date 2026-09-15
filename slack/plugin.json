@@ -2,7 +2,7 @@
   "id": "slack",
   "name": "Slack",
   "description": "Send alerts to a Slack channel (using webhooks).",
-  "version": "1.9.8",
+  "version": "1.9.9",
   "stream": "partial",
   "settings": {
     "USE_SLACK": {
@@ -74,6 +74,29 @@
       "help": "Optional mention prepended to the ban notification only (e.g. <!here> or <!channel> for Slack). Leave empty to disable.",
       "id": "slack-ban-mention",
       "label": "Ban alert mention",
+      "regex": "^.*$",
+      "type": "text"
+    },
+    "SLACK_FORMAT": {
+      "context": "global",
+      "default": "default",
+      "help": "Message format: 'default' (built-in), 'blockkit' (predefined rich layout) or 'template' (custom, uses SLACK_TEMPLATE).",
+      "id": "slack-format",
+      "label": "Message format",
+      "regex": "^(default|blockkit|template)$",
+      "type": "select",
+      "select": [
+        "default",
+        "blockkit",
+        "template"
+      ]
+    },
+    "SLACK_TEMPLATE": {
+      "context": "global",
+      "default": "",
+      "help": "Custom notification payload (raw JSON) used when SLACK_FORMAT=template. Supports {{variables}} and {{#if var}}...{{/if}} sections; values are JSON-escaped and the result must be valid JSON (falls back to default if not).",
+      "id": "slack-template",
+      "label": "Custom template",
       "regex": "^.*$",
       "type": "text"
     }

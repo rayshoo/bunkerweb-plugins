@@ -51,6 +51,39 @@ local function truncate(str, max)
 	end
 	return str
 end
+
+-- JSON-escapes a value so it can be injected inside a quoted string of a JSON template
+local function json_escape(value)
+	local quoted = encode(tostring(value or ""))
+	return quoted:sub(2, -2)
+end
+
+-- Renders a template : resolves {{#if var}}...{{/if}} sections then substitutes {{ var }}
+-- with JSON-escaped values (nesting is not supported ; the result is validated as JSON by the caller)
+local function render_template(tmpl, vars)
+	local out = tmpl
+	local changed = true
+	while changed do
+		changed = false
+		out = out:gsub("{{#if%s+([%w_]+)%s*}}(.-){{/if}}", function(name, inner)
+			changed = true
+			local v = vars[name]
+			if v ~= nil and v ~= "" and v ~= "0" and v ~= false then
+				return inner
+			end
+			return ""
+		end)
+	end
+	out = out:gsub("{{%s*([%w_]+)%s*}}", function(name)
+		local v = vars[name]
+		if v == nil then
+			return ""
+		end
+		return json_escape(v)
+	end)
+	return out
+end
+
 local ALERTS_MAX = 20
 
 -- Per-worker cache of the ipmatcher built from SLACK_ALERT_IPS
@@ -232,6 +265,7 @@ function slack:get_stats()
 	local stats = {
 		source = "local",
 		alert_ips = self.variables["SLACK_ALERT_IPS"] or "",
+		format = self.variables["SLACK_FORMAT"] or "default",
 		threshold = tonumber(self.variables["SLACK_UNLISTED_THRESHOLD"]) or 0,
 		period = tonumber(self.variables["SLACK_UNLISTED_PERIOD"]) or 600,
 		watched_alerts = {},
@@ -260,6 +294,105 @@ function slack:get_stats()
 	return stats
 end
 
+-- Builds the normalized variables exposed to templates (all defined, empty when not applicable)
+function slack:build_vars(event, info)
+	local rd = info.reason_data or {}
+	local function join(t)
+		if type(t) == "table" then
+			return table.concat(t, ", ")
+		end
+		return tostring(t or "")
+	end
+	return {
+		event = event,
+		is_block = event == "block" and "1" or "",
+		is_ban = event == "ban" and "1" or "",
+		is_unlisted = event == "unlisted" and "1" or "",
+		watched = info.watched and "1" or "",
+		ip = info.ip or "",
+		reason = info.reason or "",
+		reason_data = truncate(encode(rd), REASON_DATA_MAX),
+		server_name = info.server_name or "",
+		method = info.method or "",
+		uri = info.uri or "",
+		status = tostring(info.status or ""),
+		user_agent = info.user_agent or "",
+		request = truncate(info.request or "", MESSAGE_MAX),
+		request_id = info.request_id or "",
+		date = info.date or "",
+		headers = truncate(info.headers or "", MESSAGE_MAX),
+		rule_ids = join(rd.ids),
+		rule_msgs = join(rd.msgs),
+		ban_duration = info.ban_duration or "",
+		count = info.count and tostring(info.count) or "",
+		period = info.period and tostring(info.period) or "",
+		-- The configured ban mention is always available ; the user decides where to use it
+		mention = self.variables["SLACK_BAN_MENTION"] or "",
+	}
+end
+
+-- Our polished built-in message (no template knowledge required)
+function slack:default_message(event, info)
+	if event == "ban" then
+		local mention = self.variables["SLACK_BAN_MENTION"] or ""
+		return {
+			text = (mention ~= "" and (mention .. "\n") or "")
+				.. ":no_entry: *A watched IP is BANNED* (SLACK_ALERT_IPS)\n```IP "
+				.. info.ip
+				.. " is banned ("
+				.. (info.ban_duration or "")
+				.. ") on "
+				.. tostring(info.server_name)
+				.. " (reason = "
+				.. info.reason
+				.. "). This is one of your own servers.```",
+		}
+	elseif event == "unlisted" then
+		return {
+			text = "```IP "
+				.. info.ip
+				.. " (not in SLACK_ALERT_IPS) has been denied "
+				.. tostring(info.count)
+				.. " times within "
+				.. tostring(info.period)
+				.. "s (reason = "
+				.. info.reason
+				.. "). No more notification about this IP until the period ends.```",
+		}
+	end
+	local prefix = info.watched and ":rotating_light: *Denied request from a watched IP (SLACK_ALERT_IPS)*\n" or ""
+	local body = "Denied request for IP "
+		.. info.ip
+		.. " (reason = "
+		.. info.reason
+		.. " / reason data = "
+		.. truncate(encode(info.reason_data or {}), REASON_DATA_MAX)
+		.. ").\n\nRequest data :\n\n"
+		.. (info.request or "")
+		.. "\n"
+		.. (info.headers or "")
+	return { text = prefix .. "```" .. truncate(body, MESSAGE_MAX) .. "```" }
+end
+
+-- Returns the payload for an event : a raw JSON string when a valid custom template is set,
+-- otherwise the built-in table (default / blockkit). Invalid templates fall back and are recorded.
+function slack:format_message(event, info)
+	local format = self.variables["SLACK_FORMAT"] or "default"
+	if format == "template" then
+		local tmpl = self.variables["SLACK_TEMPLATE"] or ""
+		if tmpl ~= "" then
+			local rendered = render_template(tmpl, self:build_vars(event, info))
+			if pcall(decode, rendered) then
+				return rendered
+			end
+			self.logger:log(ERR, "SLACK_TEMPLATE produced invalid JSON, falling back to the default format")
+			self:record_delivery(false, nil, "invalid SLACK_TEMPLATE JSON (fell back to default)", truncate(rendered, RESPONSE_MAX))
+		end
+	end
+	-- "blockkit" is added in a later step ; until then it uses the default layout
+	return self:default_message(event, info)
+end
+
 function slack:log(bypass_use_slack)
 	-- Check if slack is enabled
 	if not bypass_use_slack then
@@ -272,14 +405,38 @@ function slack:log(bypass_use_slack)
 	if reason == nil then
 		return self:ret(true, "request not denied")
 	end
+	-- Collect the request headers once, as a formatted string
+	local headers_str = ""
+	local headers, herr = ngx_req.get_headers()
+	if not headers then
+		headers_str = "error while getting headers : " .. tostring(herr)
+	else
+		for header, value in pairs(headers) do
+			headers_str = headers_str .. header .. ": " .. value .. "\n"
+		end
+	end
+	-- Normalized context passed to the notification timers
+	local info = {
+		ip = self.ctx.bw.remote_addr,
+		reason = reason,
+		reason_data = reason_data,
+		server_name = self.ctx.bw.server_name,
+		request = ngx.var.request or "",
+		method = self.ctx.bw.request_method,
+		uri = self.ctx.bw.request_uri,
+		status = ngx.status,
+		user_agent = self.ctx.bw.http_user_agent,
+		request_id = self.ctx.bw.request_id,
+		date = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+		headers = headers_str,
+		watched = false,
+	}
 	-- Filter by SLACK_ALERT_IPS (empty list means every denied request is notified)
-	local prefix = ""
-	local watched = false
 	local matcher = self:get_alert_ips_matcher()
 	if matcher then
-		local match, err = matcher:match(self.ctx.bw.remote_addr)
+		local match, err = matcher:match(info.ip)
 		if err then
-			self.logger:log(ERR, "can't match IP " .. self.ctx.bw.remote_addr .. " : " .. err)
+			self.logger:log(ERR, "can't match IP " .. info.ip .. " : " .. err)
 		end
 		if not match then
 			if (tonumber(self.variables["SLACK_UNLISTED_THRESHOLD"]) or 0) <= 0 then
@@ -287,48 +444,15 @@ function slack:log(bypass_use_slack)
 			end
 			-- Counting is done in a timer because redis can't be used in the log phase
 			local hdr
-			hdr, err = ngx_timer.at(0, self.unlisted, self, self.ctx.bw.remote_addr, reason)
+			hdr, err = ngx_timer.at(0, self.unlisted, self, info)
 			if not hdr then
 				return self:ret(true, "can't create unlisted timer : " .. err)
 			end
 			return self:ret(true, "scheduled timer for unlisted IP")
 		end
-		watched = true
-		prefix = ":rotating_light: *Denied request from a watched IP (SLACK_ALERT_IPS)*\n"
+		info.watched = true
 	end
-	-- Compute data (body is kept inside a single code block, bounded so Slack never splits it)
-	local body = "Denied request for IP "
-		.. self.ctx.bw.remote_addr
-		.. " (reason = "
-		.. reason
-		.. " / reason data = "
-		.. truncate(encode(reason_data or {}), REASON_DATA_MAX)
-		.. ").\n\nRequest data :\n\n"
-		.. (ngx.var.request or "")
-		.. "\n"
-	local headers, err = ngx_req.get_headers()
-	if not headers then
-		body = body .. "error while getting headers : " .. err
-	else
-		for header, value in pairs(headers) do
-			body = body .. header .. ": " .. value .. "\n"
-		end
-	end
-	local data = {}
-	data.text = prefix .. "```" .. truncate(body, MESSAGE_MAX) .. "```"
-	-- Send request
-	local hdr
-	if watched then
-		local alert = {
-			date = ngx_now(),
-			ip = self.ctx.bw.remote_addr,
-			reason = reason,
-			server_name = self.ctx.bw.server_name,
-		}
-		hdr, err = ngx_timer.at(0, self.watched, self, data, alert)
-	else
-		hdr, err = ngx_timer.at(0, self.send, self, data)
-	end
+	local hdr, err = ngx_timer.at(0, self.notify, self, info)
 	if not hdr then
 		return self:ret(true, "can't create report timer : " .. err)
 	end
@@ -336,69 +460,55 @@ function slack:log(bypass_use_slack)
 end
 
 -- luacheck: ignore 212
-function slack.watched(premature, self, data, alert)
-	-- A watched IP that is actually banned is a critical event : notify once per ban (with an
-	-- optional mention) and suppress the per-request block alerts while the ban lasts
-	if self.variables["SLACK_BAN_ALERT"] == "yes" then
-		local banned, _, ttl = is_banned(alert.ip, alert.server_name)
+function slack.notify(premature, self, info)
+	-- A watched IP that is actually banned is a critical event : notify once per ban and
+	-- suppress the per-request block alerts while the ban lasts
+	if info.watched and self.variables["SLACK_BAN_ALERT"] == "yes" then
+		local banned, _, ttl = is_banned(info.ip, info.server_name)
 		if banned then
-			if self:mark_ban_alerted(alert.ip, ttl) then
-				local duration = (ttl == nil or ttl == 0) and "permanent" or (tostring(ttl) .. "s")
+			if self:mark_ban_alerted(info.ip, ttl) then
+				info.ban_duration = (ttl == nil or ttl == 0) and "permanent" or (tostring(ttl) .. "s")
 				self:push_alert(BAN_ALERTS_KEY, {
 					date = ngx_now(),
-					ip = alert.ip,
-					reason = alert.reason,
-					server_name = alert.server_name,
+					ip = info.ip,
+					reason = info.reason,
+					server_name = info.server_name,
 					ttl = ttl or 0,
 				})
-				local mention = self.variables["SLACK_BAN_MENTION"] or ""
-				slack.send(premature, self, {
-					text = (mention ~= "" and (mention .. "\n") or "")
-						.. ":no_entry: *A watched IP is BANNED* (SLACK_ALERT_IPS)\n```IP "
-						.. alert.ip
-						.. " is banned ("
-						.. duration
-						.. ") on "
-						.. tostring(alert.server_name)
-						.. " (reason = "
-						.. alert.reason
-						.. "). This is one of your own servers.```",
-				})
+				slack.send(premature, self, self:format_message("ban", info))
 			end
-			-- Banned : do not send the normal block alert (avoids flooding while banned)
 			return
 		end
 	end
-	self:push_alert(WATCHED_ALERTS_KEY, alert)
-	slack.send(premature, self, data)
+	if info.watched then
+		self:push_alert(WATCHED_ALERTS_KEY, {
+			date = ngx_now(),
+			ip = info.ip,
+			reason = info.reason,
+			server_name = info.server_name,
+		})
+	end
+	slack.send(premature, self, self:format_message("block", info))
 end
 
-function slack.unlisted(premature, self, ip, reason)
+function slack.unlisted(premature, self, info)
 	local threshold = tonumber(self.variables["SLACK_UNLISTED_THRESHOLD"]) or 0
 	local period = tonumber(self.variables["SLACK_UNLISTED_PERIOD"]) or 600
-	local count = self:incr_unlisted(ip, period)
+	local count = self:incr_unlisted(info.ip, period)
 	-- Only notify once per IP, when its own count reaches the threshold
 	if count ~= threshold then
 		return
 	end
+	info.count = count
+	info.period = period
 	self:push_alert(UNLISTED_ALERTS_KEY, {
 		date = ngx_now(),
-		ip = ip,
-		reason = reason,
+		ip = info.ip,
+		reason = info.reason,
 		count = count,
 		period = period,
 	})
-	slack.send(premature, self, {
-		text = "```IP "
-			.. ip
-			.. " (not in SLACK_ALERT_IPS) has been denied "
-			.. tostring(count)
-			.. " times within "
-			.. tostring(period)
-			.. "s (reason = "
-			.. reason
-			.. "). No more notification about this IP until the period ends.```",
-	})
+	slack.send(premature, self, self:format_message("unlisted", info))
 end
 
 -- Records the outcome of a webhook delivery so it can be shown in the web UI
@@ -424,7 +534,8 @@ function slack.send(premature, self, data)
 		headers = {
 			["Content-Type"] = "application/json",
 		},
-		body = encode(data),
+		-- data is a raw JSON string when rendered from a custom template, a table otherwise
+		body = (type(data) == "string") and data or encode(data),
 	})
 	httpc:close()
 	if not res then

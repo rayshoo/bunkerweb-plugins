@@ -82,6 +82,8 @@ metadata:
 | `SLACK_UNLISTED_PERIOD`    | `600`                                  | global    | no       | Period in seconds used to count denied requests from IPs not in `SLACK_ALERT_IPS`.                                                           |
 | `SLACK_BAN_ALERT`          | `yes`                                  | global    | no       | Send one escalated notification when a watched IP gets banned, and mute its block alerts while banned.                                       |
 | `SLACK_BAN_MENTION`        |                                        | global    | no       | Optional mention added to the ban notification only (e.g. `<!here>` or `<!channel>`). Leave empty to disable.                                 |
+| `SLACK_FORMAT`               | `default`                    | global    | no       | Message format: `default`, `blockkit` or `template`.                                                                                            |
+| `SLACK_TEMPLATE`             |                              | global    | no       | Custom JSON payload used when `SLACK_FORMAT=template` (supports `{{variables}}` and `{#if}` sections).                                        |
 
 ## Filtering notifications
 
@@ -98,6 +100,26 @@ With the configuration above, denied requests from `10.0.0.5` and `10.0.1.0/24` 
 When `USE_REDIS` is set to `yes`, the counter of denied requests from unlisted IPs is shared between all BunkerWeb instances through Redis. Otherwise each instance counts on its own.
 
 When a watched IP is actually **banned** (added to the ban list, e.g. by bad-behavior), a single escalated notification is sent instead of a block alert, and further block alerts for that IP are muted until the ban ends. Set `SLACK_BAN_ALERT` to `no` to disable it, and `SLACK_BAN_MENTION` (e.g. `<!here>`/`<!channel>`) to ping on ban only.
+
+## Message format
+
+`SLACK_FORMAT` selects how notifications look:
+
+- `default` : the built-in message (no template knowledge required)
+- `blockkit` : a predefined rich layout
+- `template` : a fully custom payload from `SLACK_TEMPLATE`
+
+In `template` mode, `SLACK_TEMPLATE` is a raw JSON payload that supports `{{variables}}` and `{{#if var}}...{{/if}}` sections. Values are JSON-escaped and the rendered result must be valid JSON; if it isn't, the plugin falls back to the default format and records the error (visible in the web UI). One template covers every event (block / ban / unlisted) via the normalized variables below.
+
+Available variables: `{{ip}}` `{{reason}}` `{{reason_data}}` `{{server_name}}` `{{method}}` `{{uri}}` `{{status}}` `{{user_agent}}` `{{request}}` `{{request_id}}` `{{date}}` `{{headers}}` `{{rule_ids}}` `{{rule_msgs}}` `{{ban_duration}}` `{{count}}` `{{period}}` `{{mention}}` `{{event}}` `{{is_block}}` `{{is_ban}}` `{{is_unlisted}}`
+
+`{{mention}}` is the configured `SLACK_BAN_MENTION` value and is always available, so you decide where to use it. `{{#if is_ban}}`, `{{#if is_block}}`, `{{#if is_unlisted}}` let one template render differently per event.
+
+Example:
+
+```json
+{"text":"{{#if is_ban}}{{mention}} :no_entry: {{/if}}IP {{ip}} denied on {{server_name}} (reason={{reason}}){{#if is_ban}} — BANNED {{ban_duration}}{{/if}}"}
+```
 
 ## Web UI
 

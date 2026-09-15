@@ -156,6 +156,14 @@ def pre_render(**kwargs):
         if not stats:
             return ret
 
+        ret["info_format"] = {
+            "title": "FORMAT",
+            "value": str(stats.get("format") or "default"),
+            "description": "Message format in use",
+            "col-size": "col-12 col-md-4",
+            "card-classes": "h-100",
+        }
+
         # Webhook delivery results (shown regardless of the IP filter)
         deliveries = stats.get("deliveries", [])
         if deliveries:

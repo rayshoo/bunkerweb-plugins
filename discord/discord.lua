@@ -44,6 +44,38 @@ local BAN_ALERTS_KEY = "plugin_discord_ban_alerts"
 local BAN_ALERTED_PREFIX = "plugin_discord_ban_alerted_"
 local DELIVERIES_KEY = "plugin_discord_deliveries"
 local RESPONSE_MAX = 500
+-- JSON-escapes a value so it can be injected inside a quoted string of a JSON template
+local function json_escape(value)
+	local quoted = encode(tostring(value or ""))
+	return quoted:sub(2, -2)
+end
+
+-- Renders a template : resolves {{#if var}}...{{/if}} sections then substitutes {{ var }}
+-- with JSON-escaped values (nesting is not supported ; the result is validated as JSON by the caller)
+local function render_template(tmpl, vars)
+	local out = tmpl
+	local changed = true
+	while changed do
+		changed = false
+		out = out:gsub("{{#if%s+([%w_]+)%s*}}(.-){{/if}}", function(name, inner)
+			changed = true
+			local v = vars[name]
+			if v ~= nil and v ~= "" and v ~= "0" and v ~= false then
+				return inner
+			end
+			return ""
+		end)
+	end
+	out = out:gsub("{{%s*([%w_]+)%s*}}", function(name)
+		local v = vars[name]
+		if v == nil then
+			return ""
+		end
+		return json_escape(v)
+	end)
+	return out
+end
+
 local ALERTS_MAX = 20
 
 -- Per-worker cache of the ipmatcher built from DISCORD_ALERT_IPS
@@ -225,6 +257,7 @@ function discord:get_stats()
 	local stats = {
 		source = "local",
 		alert_ips = self.variables["DISCORD_ALERT_IPS"] or "",
+		format = self.variables["DISCORD_FORMAT"] or "default",
 		threshold = tonumber(self.variables["DISCORD_UNLISTED_THRESHOLD"]) or 0,
 		period = tonumber(self.variables["DISCORD_UNLISTED_PERIOD"]) or 600,
 		watched_alerts = {},
@@ -252,11 +285,135 @@ function discord:get_stats()
 	stats.deliveries = self:read_alerts(nil, DELIVERIES_KEY)
 	return stats
 end
+-- Builds the normalized variables exposed to templates (all defined, empty when not applicable)
+function discord:build_vars(event, info)
+	local rd = info.reason_data or {}
+	local function join(t)
+		if type(t) == "table" then
+			return table.concat(t, ", ")
+		end
+		return tostring(t or "")
+	end
+	return {
+		event = event,
+		is_block = event == "block" and "1" or "",
+		is_ban = event == "ban" and "1" or "",
+		is_unlisted = event == "unlisted" and "1" or "",
+		watched = info.watched and "1" or "",
+		ip = info.ip or "",
+		reason = info.reason or "",
+		reason_data = truncate(encode(rd), REASON_DATA_MAX),
+		server_name = info.server_name or "",
+		method = info.method or "",
+		uri = info.uri or "",
+		status = tostring(info.status or ""),
+		user_agent = info.user_agent or "",
+		request = truncate(info.request or "", MESSAGE_MAX),
+		request_id = info.request_id or "",
+		date = info.date or "",
+		headers = truncate(info.headers or "", MESSAGE_MAX),
+		rule_ids = join(rd.ids),
+		rule_msgs = join(rd.msgs),
+		ban_duration = info.ban_duration or "",
+		count = info.count and tostring(info.count) or "",
+		period = info.period and tostring(info.period) or "",
+		-- The configured ban mention is always available ; the user decides where to use it
+		mention = self.variables["DISCORD_BAN_MENTION"] or "",
+	}
+end
+
+-- Our polished built-in message (no template knowledge required)
+function discord:default_message(event, info)
+	local function nz(v)
+		v = tostring(v or "")
+		if v == "" then
+			return "-"
+		end
+		return v
+	end
+	local FIELD_MAX = 1000
+	if event == "ban" then
+		local mention = self.variables["DISCORD_BAN_MENTION"] or ""
+		local data = {
+			username = "BunkerWeb",
+			embeds = {
+				{
+					title = "🚫 Watched IP " .. info.ip .. " is BANNED",
+					description = "This is one of your own servers (DISCORD_ALERT_IPS).",
+					color = 0xE74C3C,
+					fields = {
+						{ name = "Duration", value = nz(info.ban_duration), inline = true },
+						{ name = "Server name", value = nz(info.server_name), inline = true },
+						{ name = "Reason", value = nz(info.reason), inline = true },
+					},
+				},
+			},
+		}
+		if mention ~= "" then
+			data.content = mention
+		end
+		return data
+	elseif event == "unlisted" then
+		return {
+			username = "BunkerWeb",
+			embeds = {
+				{
+					title = "Unlisted IP "
+						.. info.ip
+						.. " denied "
+						.. tostring(info.count)
+						.. " times within "
+						.. tostring(info.period)
+						.. "s",
+					description = "IP not in DISCORD_ALERT_IPS. No more notification about this IP until the period ends.",
+					color = 0xE67E22,
+					fields = {
+						{ name = "Reason", value = nz(info.reason), inline = true },
+					},
+				},
+			},
+		}
+	end
+	local embed = {
+		title = (info.watched and "🚨 " or "") .. "Denied request for IP " .. info.ip,
+		color = info.watched and 0xE74C3C or 0x125678,
+		fields = {
+			{ name = "Reason", value = nz(info.reason), inline = false },
+			{ name = "Reason data", value = nz(truncate(encode(info.reason_data or {}), FIELD_MAX)), inline = false },
+			{ name = "Request", value = nz(truncate(info.request or "", FIELD_MAX)), inline = false },
+		},
+	}
+	local headers = truncate(info.headers or "", FIELD_MAX)
+	if headers ~= "" then
+		embed.description = headers
+	end
+	return { username = "BunkerWeb", embeds = { embed } }
+end
+
+-- Returns the payload for an event : a raw JSON string when a valid custom template is set,
+-- otherwise the built-in table (default / blockkit). Invalid templates fall back and are recorded.
+function discord:format_message(event, info)
+	local format = self.variables["DISCORD_FORMAT"] or "default"
+	if format == "template" then
+		local tmpl = self.variables["DISCORD_TEMPLATE"] or ""
+		if tmpl ~= "" then
+			local rendered = render_template(tmpl, self:build_vars(event, info))
+			if pcall(decode, rendered) then
+				return rendered
+			end
+			self.logger:log(ERR, "DISCORD_TEMPLATE produced invalid JSON, falling back to the default format")
+			self:record_delivery(false, nil, "invalid DISCORD_TEMPLATE JSON (fell back to default)", truncate(rendered, RESPONSE_MAX))
+		end
+	end
+	-- "blockkit" is added in a later step ; until then it uses the default layout
+	return self:default_message(event, info)
+end
+
 function discord:log(bypass_use_discord)
-	-- Check if discord is enabled
+	-- Check if slack is enabled
 	if not bypass_use_discord then
-		if self.variables["USE_DISCORD"] ~= "yes" then
-			return self:ret(true, "discord plugin not enabled")
+		if self.variables["USE_SLACK"] ~= "yes" then
+			return self:ret(true, "slack plugin not enabled")
 		end
 	end
 	-- Check if request is denied
@@ -264,28 +421,38 @@ function discord:log(bypass_use_discord)
 	if reason == nil then
 		return self:ret(true, "request not denied")
 	end
-	-- Compute data
-	local timestamp = ngx_req.start_time()
-	local formattedTimestamp = date("!%Y-%m-%dT%H:%M:%S", timestamp)
-	local milliseconds = floor((timestamp - floor(timestamp)) * 1000)
-	local formatField = function(inputString)
-		if len(inputString) <= 1021 then
-			return inputString
-		else
-			return sub(inputString, 1, 1021) .. "..."
+	-- Collect the request headers once, as a formatted string
+	local headers_str = ""
+	local headers, herr = ngx_req.get_headers()
+	if not headers then
+		headers_str = "error while getting headers : " .. tostring(herr)
+	else
+		for header, value in pairs(headers) do
+			headers_str = headers_str .. header .. ": " .. value .. "\n"
 		end
 	end
-	local embedTimestamp = formattedTimestamp .. "." .. format("%03d", milliseconds) .. "Z"
-
+	-- Normalized context passed to the notification timers
+	local info = {
+		ip = self.ctx.bw.remote_addr,
+		reason = reason,
+		reason_data = reason_data,
+		server_name = self.ctx.bw.server_name,
+		request = ngx.var.request or "",
+		method = self.ctx.bw.request_method,
+		uri = self.ctx.bw.request_uri,
+		status = ngx.status,
+		user_agent = self.ctx.bw.http_user_agent,
+		request_id = self.ctx.bw.request_id,
+		date = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+		headers = headers_str,
+		watched = false,
+	}
 	-- Filter by DISCORD_ALERT_IPS (empty list means every denied request is notified)
-	local title = "Denied request for IP " .. self.ctx.bw.remote_addr
-	local color = 0x125678
-	local watched = false
 	local matcher = self:get_alert_ips_matcher()
 	if matcher then
-		local match, err = matcher:match(self.ctx.bw.remote_addr)
+		local match, err = matcher:match(info.ip)
 		if err then
-			self.logger:log(ERR, "can't match IP " .. self.ctx.bw.remote_addr .. " : " .. err)
+			self.logger:log(ERR, "can't match IP " .. info.ip .. " : " .. err)
 		end
 		if not match then
 			if (tonumber(self.variables["DISCORD_UNLISTED_THRESHOLD"]) or 0) <= 0 then
@@ -293,91 +460,15 @@ function discord:log(bypass_use_discord)
 			end
 			-- Counting is done in a timer because redis can't be used in the log phase
 			local hdr
-			hdr, err = ngx_timer.at(0, self.unlisted, self, self.ctx.bw.remote_addr, reason, embedTimestamp)
+			hdr, err = ngx_timer.at(0, self.unlisted, self, info)
 			if not hdr then
 				return self:ret(true, "can't create unlisted timer : " .. err)
 			end
 			return self:ret(true, "scheduled timer for unlisted IP")
 		end
-		watched = true
-		title = "🚨 Denied request from watched IP " .. self.ctx.bw.remote_addr
-		color = 0xE74C3C
+		info.watched = true
 	end
-
-	local data = {
-		username = "BunkerWeb",
-		embeds = {
-			{
-				title = title,
-				timestamp = embedTimestamp,
-				color = color,
-				provider = {
-					name = "BunkerWeb",
-					url = "https://github.com/bunkerity/bunkerweb",
-				},
-				author = {
-					name = "BunkerWeb's Discord plugin",
-					url = "https://github.com/bunkerity/bunkerweb",
-					icon_url = "https://raw.githubusercontent.com/bunkerity/bunkerweb-plugins/main/logo.png",
-				},
-				fields = {
-					{
-						name = "Request data",
-						value = formatField(ngx.var.request),
-						inline = false,
-					},
-					{
-						name = "Reason",
-						value = formatField(reason),
-						inline = false,
-					},
-					{
-						name = "Reason data",
-						value = formatField(encode(reason_data or {})),
-						inline = false,
-					},
-				},
-			},
-		},
-	}
-	local headers, err = ngx_req.get_headers()
-	if not headers then
-		data.embeds[1].description = "**error while getting headers : " .. err .. "**"
-	else
-		local count = 0
-		for _ in pairs(headers) do
-			count = count + 1
-		end
-		if count > 23 then
-			local desc = "Headers :\n"
-			for header, value in pairs(headers) do
-				desc = desc .. header .. ": " .. value .. "\n"
-			end
-			-- Discord caps the description at 4096 chars, keep it well under and inside the code block
-			data.embeds[1].description = "```" .. formatField(desc) .. "```"
-		else
-			for header, value in pairs(headers) do
-				table.insert(data.embeds[1].fields, {
-					name = header,
-					value = formatField(value),
-					inline = true,
-				})
-			end
-		end
-	end
-	-- Send request
-	local hdr
-	if watched then
-		local alert = {
-			date = ngx_now(),
-			ip = self.ctx.bw.remote_addr,
-			reason = reason,
-			server_name = self.ctx.bw.server_name,
-		}
-		hdr, err = ngx_timer.at(0, self.watched, self, data, alert)
-	else
-		hdr, err = ngx_timer.at(0, self.send, self, data)
-	end
+	local hdr, err = ngx_timer.at(0, self.notify, self, info)
 	if not hdr then
 		return self:ret(true, "can't create report timer : " .. err)
 	end
@@ -385,108 +476,55 @@ function discord:log(bypass_use_discord)
 end
 
 -- luacheck: ignore 212
-function discord.watched(premature, self, data, alert)
-	-- A watched IP that is actually banned is a critical event : notify once per ban (with an
-	-- optional mention) and suppress the per-request block alerts while the ban lasts
-	if self.variables["DISCORD_BAN_ALERT"] == "yes" then
-		local banned, _, ttl = is_banned(alert.ip, alert.server_name)
+function discord.notify(premature, self, info)
+	-- A watched IP that is actually banned is a critical event : notify once per ban and
+	-- suppress the per-request block alerts while the ban lasts
+	if info.watched and self.variables["DISCORD_BAN_ALERT"] == "yes" then
+		local banned, _, ttl = is_banned(info.ip, info.server_name)
 		if banned then
-			if self:mark_ban_alerted(alert.ip, ttl) then
-				local duration = (ttl == nil or ttl == 0) and "permanent" or (tostring(ttl) .. "s")
+			if self:mark_ban_alerted(info.ip, ttl) then
+				info.ban_duration = (ttl == nil or ttl == 0) and "permanent" or (tostring(ttl) .. "s")
 				self:push_alert(BAN_ALERTS_KEY, {
 					date = ngx_now(),
-					ip = alert.ip,
-					reason = alert.reason,
-					server_name = alert.server_name,
+					ip = info.ip,
+					reason = info.reason,
+					server_name = info.server_name,
 					ttl = ttl or 0,
 				})
-				local mention = self.variables["DISCORD_BAN_MENTION"] or ""
-				local ban_data = {
-					username = "BunkerWeb",
-					embeds = {
-						{
-							title = "🚫 Watched IP " .. alert.ip .. " is BANNED",
-							description = "This is one of your own servers (DISCORD_ALERT_IPS).",
-							color = 0xE74C3C,
-							provider = {
-								name = "BunkerWeb",
-								url = "https://github.com/bunkerity/bunkerweb",
-							},
-							author = {
-								name = "BunkerWeb's Discord plugin",
-								url = "https://github.com/bunkerity/bunkerweb",
-								icon_url = "https://raw.githubusercontent.com/bunkerity/bunkerweb-plugins/main/logo.png",
-							},
-							fields = {
-								{ name = "Duration", value = duration, inline = true },
-								{ name = "Server name", value = tostring(alert.server_name), inline = true },
-								{ name = "Reason", value = tostring(alert.reason), inline = true },
-							},
-						},
-					},
-				}
-				-- Mentions only ping when placed in the message content, not inside embeds
-				if mention ~= "" then
-					ban_data.content = mention
-				end
-				discord.send(premature, self, ban_data)
+				discord.send(premature, self, self:format_message("ban", info))
 			end
-			-- Banned : do not send the normal block alert (avoids flooding while banned)
 			return
 		end
 	end
-	self:push_alert(WATCHED_ALERTS_KEY, alert)
-	discord.send(premature, self, data)
+	if info.watched then
+		self:push_alert(WATCHED_ALERTS_KEY, {
+			date = ngx_now(),
+			ip = info.ip,
+			reason = info.reason,
+			server_name = info.server_name,
+		})
+	end
+	discord.send(premature, self, self:format_message("block", info))
 end
 
-function discord.unlisted(premature, self, ip, reason, embedTimestamp)
+function discord.unlisted(premature, self, info)
 	local threshold = tonumber(self.variables["DISCORD_UNLISTED_THRESHOLD"]) or 0
 	local period = tonumber(self.variables["DISCORD_UNLISTED_PERIOD"]) or 600
-	local count = self:incr_unlisted(ip, period)
+	local count = self:incr_unlisted(info.ip, period)
 	-- Only notify once per IP, when its own count reaches the threshold
 	if count ~= threshold then
 		return
 	end
+	info.count = count
+	info.period = period
 	self:push_alert(UNLISTED_ALERTS_KEY, {
 		date = ngx_now(),
-		ip = ip,
-		reason = reason,
+		ip = info.ip,
+		reason = info.reason,
 		count = count,
 		period = period,
 	})
-	discord.send(premature, self, {
-		username = "BunkerWeb",
-		embeds = {
-			{
-				title = "Unlisted IP "
-					.. ip
-					.. " denied "
-					.. tostring(count)
-					.. " times within "
-					.. tostring(period)
-					.. "s",
-				description = "IP not in DISCORD_ALERT_IPS. No more notification about this IP until the period ends.",
-				timestamp = embedTimestamp,
-				color = 0xE67E22,
-				provider = {
-					name = "BunkerWeb",
-					url = "https://github.com/bunkerity/bunkerweb",
-				},
-				author = {
-					name = "BunkerWeb's Discord plugin",
-					url = "https://github.com/bunkerity/bunkerweb",
-					icon_url = "https://raw.githubusercontent.com/bunkerity/bunkerweb-plugins/main/logo.png",
-				},
-				fields = {
-					{
-						name = "Reason",
-						value = reason,
-						inline = true,
-					},
-				},
-			},
-		},
-	})
+	discord.send(premature, self, self:format_message("unlisted", info))
 end
 
 -- Records the outcome of a webhook delivery so it can be shown in the web UI
@@ -512,7 +550,8 @@ function discord.send(premature, self, data)
 		headers = {
 			["Content-Type"] = "application/json",
 		},
-		body = encode(data),
+		-- data is a raw JSON string when rendered from a custom template, a table otherwise
+		body = (type(data) == "string") and data or encode(data),
 	})
 	httpc:close()
 	if not res then
