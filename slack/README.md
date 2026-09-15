@@ -104,6 +104,7 @@ When a watched IP is actually **banned** (added to the ban list, e.g. by bad-beh
 The plugin page of the web UI shows :
 
 - the IP filter status (`SLACK_ALERT_IPS`, `SLACK_UNLISTED_THRESHOLD` and `SLACK_UNLISTED_PERIOD`)
+- the recent webhook delivery results (success/failure, HTTP status, response)
 - the IPs/networks of `SLACK_ALERT_IPS` with their ban status and last notified request
 - the IPs not in `SLACK_ALERT_IPS` that crossed the threshold (one alert per IP per period)
 - the watched IPs that got **banned** (one escalated alert per ban, block alerts muted while banned)

@@ -102,6 +102,7 @@ When a watched IP is actually **banned** (added to the ban list, e.g. by bad-beh
 The plugin page of the web UI shows :
 
 - the IP filter status (`WEBHOOK_ALERT_IPS`, `WEBHOOK_UNLISTED_THRESHOLD` and `WEBHOOK_UNLISTED_PERIOD`)
+- the recent webhook delivery results (success/failure, HTTP status, response)
 - the IPs/networks of `WEBHOOK_ALERT_IPS` with their ban status and last notified request
 - the IPs not in `WEBHOOK_ALERT_IPS` that crossed the threshold (one alert per IP per period)
 - the watched IPs that got **banned** (one escalated alert per ban, block alerts muted while banned)

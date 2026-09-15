@@ -37,6 +37,8 @@ local WATCHED_ALERTS_KEY = "plugin_slack_watched_alerts"
 local UNLISTED_ALERTS_KEY = "plugin_slack_unlisted_alerts"
 local BAN_ALERTS_KEY = "plugin_slack_ban_alerts"
 local BAN_ALERTED_PREFIX = "plugin_slack_ban_alerted_"
+local DELIVERIES_KEY = "plugin_slack_deliveries"
+local RESPONSE_MAX = 500
 -- Slack silently splits or drops oversized messages, which breaks the code block ; keep it bounded
 local MESSAGE_MAX = 3000
 local REASON_DATA_MAX = 800
@@ -126,7 +128,11 @@ end
 
 -- Stores a notification in a capped list (shared through redis if enabled)
 function slack:push_alert(list_key, alert)
-	local value = encode(alert)
+	local encoded, value = pcall(encode, alert)
+	if not encoded then
+		self.logger:log(ERR, "can't encode alert : " .. tostring(value))
+		return
+	end
 	if self.use_redis then
 		local cs = clusterstore:new()
 		local ok, err = cs:connect()
@@ -231,6 +237,7 @@ function slack:get_stats()
 		watched_alerts = {},
 		unlisted_alerts = {},
 		ban_alerts = {},
+		deliveries = {},
 	}
 	if self.use_redis then
 		local cs = clusterstore:new()
@@ -240,6 +247,7 @@ function slack:get_stats()
 			stats.watched_alerts = self:read_alerts(cs, WATCHED_ALERTS_KEY)
 			stats.unlisted_alerts = self:read_alerts(cs, UNLISTED_ALERTS_KEY)
 			stats.ban_alerts = self:read_alerts(cs, BAN_ALERTS_KEY)
+			stats.deliveries = self:read_alerts(cs, DELIVERIES_KEY)
 			cs:close()
 			return stats
 		end
@@ -248,6 +256,7 @@ function slack:get_stats()
 	stats.watched_alerts = self:read_alerts(nil, WATCHED_ALERTS_KEY)
 	stats.unlisted_alerts = self:read_alerts(nil, UNLISTED_ALERTS_KEY)
 	stats.ban_alerts = self:read_alerts(nil, BAN_ALERTS_KEY)
+	stats.deliveries = self:read_alerts(nil, DELIVERIES_KEY)
 	return stats
 end
 
@@ -392,10 +401,23 @@ function slack.unlisted(premature, self, ip, reason)
 	})
 end
 
+-- Records the outcome of a webhook delivery so it can be shown in the web UI
+function slack:record_delivery(ok, status, err, body)
+	self:push_alert(DELIVERIES_KEY, {
+		date = ngx_now(),
+		ok = ok and true or false,
+		status = status or 0,
+		error = err and truncate(err, RESPONSE_MAX) or "",
+		response = body and truncate(body, RESPONSE_MAX) or "",
+	})
+end
+
 function slack.send(premature, self, data)
 	local httpc, err = http_new()
 	if not httpc then
 		self.logger:log(ERR, "can't instantiate http object : " .. err)
+		self:record_delivery(false, nil, "can't instantiate http object : " .. tostring(err), nil)
+		return
 	end
 	local res, err_http = httpc:request_uri(self.variables["SLACK_WEBHOOK_URL"], {
 		method = "POST",
@@ -406,10 +428,13 @@ function slack.send(premature, self, data)
 	})
 	httpc:close()
 	if not res then
-		self.logger:log(ERR, "error while sending request : " .. err_http)
+		self.logger:log(ERR, "error while sending request : " .. tostring(err_http))
+		self:record_delivery(false, nil, tostring(err_http), nil)
+		return
 	end
 	if self.variables["SLACK_RETRY_IF_LIMITED"] == "yes" and res.status == 429 and res.headers["Retry-After"] then
 		self.logger:log(WARN, "slack API is rate-limiting us, retrying in " .. res.headers["Retry-After"] .. "s")
+		self:record_delivery(false, res.status, "rate-limited, retrying in " .. res.headers["Retry-After"] .. "s", res.body)
 		local hdr
 		hdr, err = ngx_timer.at(res.headers["Retry-After"], self.send, self, data)
 		if not hdr then
@@ -420,9 +445,11 @@ function slack.send(premature, self, data)
 	end
 	if res.status < 200 or res.status > 299 then
 		self.logger:log(ERR, "request returned status " .. tostring(res.status))
+		self:record_delivery(false, res.status, nil, res.body)
 		return
 	end
 	self.logger:log(INFO, "request sent to webhook")
+	self:record_delivery(true, res.status, nil, res.body)
 end
 
 function slack:log_default()

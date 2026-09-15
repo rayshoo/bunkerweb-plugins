@@ -71,16 +71,18 @@ def _get_stats(bw_instances_utils):
             watched = _alist(data.get("watched_alerts"))
             unlisted = _alist(data.get("unlisted_alerts"))
             ban = _alist(data.get("ban_alerts"))
+            deliveries = _alist(data.get("deliveries"))
             if data["source"] == "redis":
-                return data | {"watched_alerts": watched, "unlisted_alerts": unlisted, "ban_alerts": ban}
+                return data | {"watched_alerts": watched, "unlisted_alerts": unlisted, "ban_alerts": ban, "deliveries": deliveries}
             if stats is None:
-                stats = data | {"watched_alerts": list(watched), "unlisted_alerts": list(unlisted), "ban_alerts": list(ban)}
+                stats = data | {"watched_alerts": list(watched), "unlisted_alerts": list(unlisted), "ban_alerts": list(ban), "deliveries": list(deliveries)}
                 continue
             stats["watched_alerts"].extend(watched)
             stats["unlisted_alerts"].extend(unlisted)
             stats["ban_alerts"].extend(ban)
+            stats["deliveries"].extend(deliveries)
     if stats:
-        for key in ("watched_alerts", "unlisted_alerts", "ban_alerts"):
+        for key in ("watched_alerts", "unlisted_alerts", "ban_alerts", "deliveries"):
             stats[key] = sorted(stats[key], key=lambda alert: alert.get("date", 0), reverse=True)[:ALERTS_MAX]
     return stats
 
@@ -153,6 +155,28 @@ def pre_render(**kwargs):
         stats = _get_stats(kwargs["bw_instances_utils"])
         if not stats:
             return ret
+
+        # Webhook delivery results (shown regardless of the IP filter)
+        deliveries = stats.get("deliveries", [])
+        if deliveries:
+            last = deliveries[0]
+            ret["info_last_delivery"] = {
+                "title": "LAST DELIVERY",
+                "value": "OK" if last.get("ok") else "Failed",
+                "description": _format_local_date(last.get("date")) + (f" · HTTP {last.get('status')}" if last.get("status") else ""),
+                "svg_color": "success" if last.get("ok") else "danger",
+                "col-size": "col-12 col-md-4",
+                "card-classes": "h-100",
+            }
+            ret["list_recent_deliveries"] = {
+                "data": {
+                    "Date": [_format_date(d.get("date")) for d in deliveries],
+                    "Result": ["OK" if d.get("ok") else "Failed" for d in deliveries],
+                    "HTTP": [str(d.get("status") or "") for d in deliveries],
+                    "Details": [str(d.get("error") or d.get("response") or "") for d in deliveries],
+                },
+                "col-size": "col-12",
+            }
 
         networks = _parse_networks(stats.get("alert_ips"))
         threshold = int(stats.get("threshold") or 0)
