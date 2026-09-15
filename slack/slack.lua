@@ -52,6 +52,28 @@ local function truncate(str, max)
 	return str
 end
 
+-- Summarizes the useful parts of modsecurity reason data (skips the huge matched_vars body)
+local function summarize_reason_data(rd)
+	if type(rd) ~= "table" then
+		return ""
+	end
+	local parts = {}
+	local function add(label, value)
+		if type(value) == "table" then
+			value = table.concat(value, ", ")
+		end
+		value = tostring(value or "")
+		if value ~= "" then
+			parts[#parts + 1] = label .. ": " .. value
+		end
+	end
+	add("ids", rd.ids)
+	add("msgs", rd.msgs)
+	add("anomaly_score", rd.anomaly_score)
+	add("matched_var_names", rd.matched_var_names)
+	return table.concat(parts, "\n")
+end
+
 -- JSON-escapes a value so it can be injected inside a quoted string of a JSON template
 local function json_escape(value)
 	local quoted = encode(tostring(value or ""))
@@ -398,6 +420,11 @@ function slack:blockkit_message(event, info)
 			fields = fields({ { "IP", v.ip }, { "Duration", v.ban_duration }, { "Server", v.server_name }, { "Reason", v.reason } }),
 		})
 		table_insert(blocks, { type = "context", elements = { { type = "mrkdwn", text = "This is one of your own servers · " .. v.date } } })
+		local detail = summarize_reason_data(info.reason_data)
+		if detail ~= "" then
+			table_insert(blocks, { type = "divider" })
+			table_insert(blocks, { type = "section", text = { type = "mrkdwn", text = "```" .. truncate(detail, 1500) .. "```" } })
+		end
 	elseif event == "unlisted" then
 		header = "Unlisted IP threshold reached"
 		color = "#E67E22"
@@ -412,6 +439,11 @@ function slack:blockkit_message(event, info)
 			{ type = "section", fields = fields({ { "IP", v.ip }, { "Reason", v.reason }, { "Server", v.server_name }, { "Rules", v.rule_ids } }) },
 			{ type = "context", elements = { { type = "mrkdwn", text = truncate(v.method .. " " .. v.uri, 150) .. " · " .. v.date } } },
 		}
+		local detail = summarize_reason_data(info.reason_data)
+		if detail ~= "" then
+			table_insert(blocks, { type = "divider" })
+			table_insert(blocks, { type = "section", text = { type = "mrkdwn", text = "```" .. truncate(detail, 1500) .. "```" } })
+		end
 	end
 	return {
 		blocks = { { type = "header", text = { type = "plain_text", text = truncate(header, 150), emoji = true } } },
