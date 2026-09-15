@@ -376,7 +376,7 @@ function discord:default_message(event, info)
 	end
 	local embed = {
 		title = (info.watched and "🚨 " or "") .. "Denied request for IP " .. info.ip,
-		color = info.watched and 0xE74C3C or 0x125678,
+		color = 0xF1C40F,
 		fields = {
 			{ name = "Reason", value = nz(info.reason), inline = false },
 			{ name = "Reason data", value = nz(truncate(encode(info.reason_data or {}), FIELD_MAX)), inline = false },
@@ -405,15 +405,15 @@ function discord:format_message(event, info)
 			self:record_delivery(false, nil, "invalid DISCORD_TEMPLATE JSON (fell back to default)", truncate(rendered, RESPONSE_MAX))
 		end
 	end
-	-- "blockkit" is added in a later step ; until then it uses the default layout
+	-- Discord's rich form is the embed, which is also the default layout
 	return self:default_message(event, info)
 end
 
 function discord:log(bypass_use_discord)
-	-- Check if slack is enabled
+	-- Check if discord is enabled
 	if not bypass_use_discord then
-		if self.variables["USE_SLACK"] ~= "yes" then
-			return self:ret(true, "slack plugin not enabled")
+		if self.variables["USE_DISCORD"] ~= "yes" then
+			return self:ret(true, "discord plugin not enabled")
 		end
 	end
 	-- Check if request is denied

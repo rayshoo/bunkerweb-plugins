@@ -373,6 +373,28 @@ function webhook:default_message(event, info)
 end
 
 -- Returns the payload for an event : a raw JSON string when a valid custom template is set,
+-- Predefined structured JSON payload (a generic webhook consumer can parse the fields directly)
+function webhook:blockkit_message(event, info)
+	local v = self:build_vars(event, info)
+	return {
+		event = event,
+		ip = v.ip,
+		reason = v.reason,
+		reason_data = info.reason_data or {},
+		server_name = v.server_name,
+		method = v.method,
+		uri = v.uri,
+		status = v.status,
+		request_id = v.request_id,
+		date = v.date,
+		rule_ids = v.rule_ids,
+		rule_msgs = v.rule_msgs,
+		ban_duration = v.ban_duration ~= "" and v.ban_duration or nil,
+		count = v.count ~= "" and tonumber(v.count) or nil,
+		period = v.period ~= "" and tonumber(v.period) or nil,
+	}
+end
+
 -- otherwise the built-in table (default / blockkit). Invalid templates fall back and are recorded.
 function webhook:format_message(event, info)
 	local format = self.variables["WEBHOOK_FORMAT"] or "default"
@@ -386,16 +408,17 @@ function webhook:format_message(event, info)
 			self.logger:log(ERR, "WEBHOOK_TEMPLATE produced invalid JSON, falling back to the default format")
 			self:record_delivery(false, nil, "invalid WEBHOOK_TEMPLATE JSON (fell back to default)", truncate(rendered, RESPONSE_MAX))
 		end
+	elseif format == "blockkit" then
+		return self:blockkit_message(event, info)
 	end
-	-- "blockkit" is added in a later step ; until then it uses the default layout
 	return self:default_message(event, info)
 end
 
 function webhook:log(bypass_use_webhook)
-	-- Check if slack is enabled
+	-- Check if webhook is enabled
 	if not bypass_use_webhook then
-		if self.variables["USE_SLACK"] ~= "yes" then
-			return self:ret(true, "slack plugin not enabled")
+		if self.variables["USE_WEBHOOK"] ~= "yes" then
+			return self:ret(true, "webhook plugin not enabled")
 		end
 	end
 	-- Check if request is denied

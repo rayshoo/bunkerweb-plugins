@@ -375,6 +375,50 @@ function slack:default_message(event, info)
 end
 
 -- Returns the payload for an event : a raw JSON string when a valid custom template is set,
+-- Predefined Slack Block Kit layout : a header block plus a colored attachment with fields
+function slack:blockkit_message(event, info)
+	local v = self:build_vars(event, info)
+	local function fields(list)
+		local out = {}
+		for _, kv in ipairs(list) do
+			table_insert(out, { type = "mrkdwn", text = "*" .. kv[1] .. "*\n" .. (kv[2] ~= "" and kv[2] or "-") })
+		end
+		return out
+	end
+	local header, color, blocks
+	if event == "ban" then
+		header = "🚫 Watched IP is BANNED"
+		color = "#E74C3C"
+		blocks = {}
+		if v.mention ~= "" then
+			table_insert(blocks, { type = "section", text = { type = "mrkdwn", text = v.mention } })
+		end
+		table_insert(blocks, {
+			type = "section",
+			fields = fields({ { "IP", v.ip }, { "Duration", v.ban_duration }, { "Server", v.server_name }, { "Reason", v.reason } }),
+		})
+		table_insert(blocks, { type = "context", elements = { { type = "mrkdwn", text = "This is one of your own servers · " .. v.date } } })
+	elseif event == "unlisted" then
+		header = "Unlisted IP threshold reached"
+		color = "#E67E22"
+		blocks = {
+			{ type = "section", fields = fields({ { "IP", v.ip }, { "Denied", v.count .. " / " .. v.period .. "s" }, { "Reason", v.reason } }) },
+			{ type = "context", elements = { { type = "mrkdwn", text = v.date } } },
+		}
+	else
+		header = (v.watched ~= "" and "🚨 " or "") .. "Denied request"
+		color = "#F1C40F"
+		blocks = {
+			{ type = "section", fields = fields({ { "IP", v.ip }, { "Reason", v.reason }, { "Server", v.server_name }, { "Rules", v.rule_ids } }) },
+			{ type = "context", elements = { { type = "mrkdwn", text = truncate(v.method .. " " .. v.uri, 150) .. " · " .. v.date } } },
+		}
+	end
+	return {
+		blocks = { { type = "header", text = { type = "plain_text", text = truncate(header, 150), emoji = true } } },
+		attachments = { { color = color, blocks = blocks } },
+	}
+end
+
 -- otherwise the built-in table (default / blockkit). Invalid templates fall back and are recorded.
 function slack:format_message(event, info)
 	local format = self.variables["SLACK_FORMAT"] or "default"
@@ -388,8 +432,9 @@ function slack:format_message(event, info)
 			self.logger:log(ERR, "SLACK_TEMPLATE produced invalid JSON, falling back to the default format")
 			self:record_delivery(false, nil, "invalid SLACK_TEMPLATE JSON (fell back to default)", truncate(rendered, RESPONSE_MAX))
 		end
+	elseif format == "blockkit" then
+		return self:blockkit_message(event, info)
 	end
-	-- "blockkit" is added in a later step ; until then it uses the default layout
 	return self:default_message(event, info)
 end
 
